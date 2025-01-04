@@ -1,4 +1,4 @@
-use core::{fmt, panic};
+use core::fmt;
 use std::char;
 extern crate itertools;
 use itertools::Itertools;
@@ -7,7 +7,6 @@ use itertools::Itertools;
 enum Token {
     Class,
     Token,
-    Id,
     Ignore,
     BracketOpen,
     BracketOpenNegate,
@@ -16,12 +15,13 @@ enum Token {
     ParenOpen,
     ParenClose,
     Pipe,
-    Character,
     Dash,
     Star,
     Plus,
     Question,
     ForwardSlash,
+    Characters,
+    Comma,
 }
 
 /// Token + metadata parser uses
@@ -37,7 +37,7 @@ struct TokenEntry {
 #[derive(Debug)]
 enum State {
     Initial,
-    Identifier,
+    Characters,
     Comment,
     // set token states
     BracketOpen,
@@ -50,12 +50,12 @@ impl fmt::Display for State {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let text = match self {
             State::Initial => "Initial",
-            State::Identifier => "Identifier",
             State::Comment => "Comment",
             State::BracketOpen => "BracketOpen",
             State::Dash => "Dash",
             State::ForwardSlash => "ForwardSlash",
             State::Escape => "Escape",
+            State::Characters => "Characters",
         };
         text.fmt(f)
     }
@@ -74,8 +74,8 @@ struct Lexer {
     pos: usize,
 }
 
-fn evaluate_escape_characters(lexeme: &String) -> String {
-    match lexeme.as_str() {
+fn evaluate_escape_characters(lexeme: &str) -> String {
+    match lexeme {
         "\\n" => "\n".to_string(),
         "\\t" => "\t".to_string(),
         "\\f" => "\x0C".to_string(),
@@ -93,14 +93,6 @@ impl Lexer {
             current_line: 0,
             current_col: 0,
             pos: 0,
-        }
-    }
-    fn create_token_entry(&self, token: Token, lexeme: &String) -> TokenEntry {
-        TokenEntry {
-            token,
-            lexeme: lexeme.clone(),
-            line: self.current_line,
-            col: self.current_col - lexeme.len(),
         }
     }
 }
@@ -124,7 +116,7 @@ impl Iterator for Lexer {
         );
         while self.pos < self.input.len() {
             let c = self.input.get(self.pos).unwrap();
-            let lookahead = self.input.get(self.pos + 1);
+            // let lookahead = self.input.get(self.pos + 1);
             lexeme.push(*c);
 
             println!(
@@ -141,6 +133,10 @@ impl Iterator for Lexer {
                             return_token: None,
                         }
                     }
+                    '\n' => Transition {
+                        next_state: None,
+                        return_token: None,
+                    },
                     '-' => Transition {
                         next_state: Some(State::Dash),
                         return_token: None,
@@ -185,45 +181,32 @@ impl Iterator for Lexer {
                         next_state: None,
                         return_token: Some(Token::Pipe),
                     },
-                    _char => {
-                        let mut default_transition = Transition {
-                            next_state: None,
-                            return_token: Some(Token::Character),
-                        };
-                        if _char.is_alphabetic() {
-                            if let Some(lc) = lookahead {
-                                if lc.is_alphanumeric() {
-                                    default_transition = Transition {
-                                        next_state: Some(State::Identifier),
-                                        return_token: None,
-                                    }
-                                }
-                            }
-                        }
-                        default_transition
-                    }
+                    ',' => Transition {
+                        next_state: None,
+                        return_token: Some(Token::Comma),
+                    },
+                    _char => Transition {
+                        next_state: Some(State::Characters),
+                        return_token: None,
+                    },
                 },
-                State::Identifier => {
-                    let done_with_identifier = match lookahead {
-                        Some(lookahead_char) => !lookahead_char.is_alphanumeric(),
-                        _ => true,
-                    };
-
-                    if done_with_identifier {
+                State::Characters => {
+                    if c.is_alphanumeric() {
+                        Transition {
+                            next_state: None,
+                            return_token: None,
+                        }
+                    } else {
+                        rewind(self, &mut lexeme);
                         let token_entry = match lexeme.as_str() {
                             "class" => Token::Class,
                             "ignore" => Token::Ignore,
                             "token" => Token::Token,
-                            _ => Token::Id,
+                            _ => Token::Characters,
                         };
                         Transition {
                             next_state: Some(State::Initial),
                             return_token: Some(token_entry),
-                        }
-                    } else {
-                        Transition {
-                            next_state: None,
-                            return_token: None,
                         }
                     }
                 }
@@ -242,7 +225,7 @@ impl Iterator for Lexer {
                 },
                 State::Escape => Transition {
                     next_state: Some(State::Initial),
-                    return_token: Some(Token::Character),
+                    return_token: Some(Token::Characters),
                 },
                 State::ForwardSlash => match *c {
                     '/' => Transition {
@@ -252,7 +235,7 @@ impl Iterator for Lexer {
                     _ => {
                         rewind(self, &mut lexeme);
                         Transition {
-                            next_state: None,
+                            next_state: Some(State::Initial),
                             return_token: Some(Token::ForwardSlash),
                         }
                     }
@@ -292,7 +275,7 @@ impl Iterator for Lexer {
             }
 
             let return_token: Option<TokenEntry> = if let Some(rt) = transition.return_token {
-                if rt == Token::Character {
+                if rt == Token::Characters && lexeme.starts_with('\\') {
                     let escaped_lexeme = evaluate_escape_characters(&lexeme);
 
                     // Start of token in the actual text file will be current_col - lexeme.len() - 1 to account
@@ -326,6 +309,7 @@ impl Iterator for Lexer {
             if let Some('\n') = self.input.get(self.pos) {
                 self.current_line += 1;
                 self.current_col = 0;
+                lexeme.clear()
             } else {
                 self.current_col += 1;
             }
@@ -352,16 +336,15 @@ mod tests {
     fn test_cpp_identifier_definition() {
         // TODO: how to disambiguate identifiers and characters (ex. "a-zA" should be
         // [Character, Dash, Character] but we're getting [Character, Dash, Id])
-        let input = "class alpha [a-zA-z]
+        let input = "class alpha [a-z,A-z]
 class digit [0-9]
-class whitespace [\\n\\t\\f\\v\\r ]
+class whitespace [\\n\\t\\f\\v\\r\\ ]
 
 token Ident /[alpha]([alpha]|[digit])* /
 ignore /[whitespace]+/
 ";
-        let input2 = "class alpha [a-zA-z]";
-        let mut lexer = Lexer::from_string(input2);
-        let result_tokens = lexer.collect_vec();
+        let lexer = Lexer::from_string(input);
+        // let result_tokens = lexer.collect_vec();
         let expected_tokens = vec![
             TokenEntry {
                 col: 0,
@@ -371,7 +354,7 @@ ignore /[whitespace]+/
             },
             TokenEntry {
                 col: 6,
-                token: Token::Id,
+                token: Token::Characters,
                 lexeme: "alpha".to_string(),
                 line: 0,
             },
@@ -383,7 +366,7 @@ ignore /[whitespace]+/
             },
             TokenEntry {
                 col: 13,
-                token: Token::Character,
+                token: Token::Characters,
                 lexeme: "a".to_string(),
                 line: 0,
             },
@@ -395,36 +378,256 @@ ignore /[whitespace]+/
             },
             TokenEntry {
                 col: 15,
-                token: Token::Character,
+                token: Token::Characters,
                 lexeme: "z".to_string(),
                 line: 0,
             },
             TokenEntry {
                 col: 16,
-                token: Token::Character,
-                lexeme: "A".to_string(),
+                token: Token::Comma,
+                lexeme: ",".to_string(),
                 line: 0,
             },
             TokenEntry {
                 col: 17,
+                token: Token::Characters,
+                lexeme: "A".to_string(),
+                line: 0,
+            },
+            TokenEntry {
+                col: 18,
                 token: Token::Dash,
                 lexeme: "-".to_string(),
                 line: 0,
             },
             TokenEntry {
-                col: 18,
-                token: Token::Character,
+                col: 19,
+                token: Token::Characters,
                 lexeme: "z".to_string(),
                 line: 0,
+            },
+            TokenEntry {
+                col: 20,
+                token: Token::BracketClose,
+                lexeme: "]".to_string(),
+                line: 0,
+            },
+            TokenEntry {
+                col: 0,
+                token: Token::Class,
+                lexeme: "class".to_string(),
+                line: 1,
+            },
+            TokenEntry {
+                col: 6,
+                token: Token::Characters,
+                lexeme: "digit".to_string(),
+                line: 1,
+            },
+            TokenEntry {
+                col: 12,
+                token: Token::BracketOpen,
+                lexeme: "[".to_string(),
+                line: 1,
+            },
+            TokenEntry {
+                col: 13,
+                token: Token::Characters,
+                lexeme: "0".to_string(),
+                line: 1,
+            },
+            TokenEntry {
+                col: 14,
+                token: Token::Dash,
+                lexeme: "-".to_string(),
+                line: 1,
+            },
+            TokenEntry {
+                col: 15,
+                token: Token::Characters,
+                lexeme: "9".to_string(),
+                line: 1,
+            },
+            TokenEntry {
+                col: 16,
+                token: Token::BracketClose,
+                lexeme: "]".to_string(),
+                line: 1,
+            },
+            TokenEntry {
+                col: 0,
+                token: Token::Class,
+                lexeme: "class".to_string(),
+                line: 2,
+            },
+            TokenEntry {
+                col: 6,
+                token: Token::Characters,
+                lexeme: "whitespace".to_string(),
+                line: 2,
+            },
+            TokenEntry {
+                col: 17,
+                token: Token::BracketOpen,
+                lexeme: "[".to_string(),
+                line: 2,
+            },
+            TokenEntry {
+                col: 18,
+                token: Token::Characters,
+                lexeme: "\n".to_string(),
+                line: 2,
+            },
+            TokenEntry {
+                col: 20,
+                token: Token::Characters,
+                lexeme: "\t".to_string(),
+                line: 2,
+            },
+            TokenEntry {
+                col: 22,
+                token: Token::Characters,
+                lexeme: "\x0C".to_string(),
+                line: 2,
+            },
+            TokenEntry {
+                col: 24,
+                token: Token::Characters,
+                lexeme: "\x08".to_string(),
+                line: 2,
+            },
+            TokenEntry {
+                col: 26,
+                token: Token::Characters,
+                lexeme: "\r".to_string(),
+                line: 2,
+            },
+            TokenEntry {
+                col: 28,
+                token: Token::Characters,
+                lexeme: " ".to_string(),
+                line: 2,
+            },
+            TokenEntry {
+                col: 30,
+                token: Token::BracketClose,
+                lexeme: "]".to_string(),
+                line: 2,
+            },
+            TokenEntry {
+                col: 0,
+                token: Token::Token,
+                lexeme: "token".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 6,
+                token: Token::Characters,
+                lexeme: "Ident".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 12,
+                token: Token::ForwardSlash,
+                lexeme: "/".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 13,
+                token: Token::BracketOpen,
+                lexeme: "[".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 14,
+                token: Token::Characters,
+                lexeme: "alpha".to_string(),
+                line: 4,
             },
             TokenEntry {
                 col: 19,
                 token: Token::BracketClose,
                 lexeme: "]".to_string(),
-                line: 0,
+                line: 4,
+            },
+            TokenEntry {
+                col: 20,
+                token: Token::ParenOpen,
+                lexeme: "(".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 21,
+                token: Token::BracketOpen,
+                lexeme: "[".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 22,
+                token: Token::Characters,
+                lexeme: "alpha".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 27,
+                token: Token::BracketClose,
+                lexeme: "]".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 28,
+                token: Token::Pipe,
+                lexeme: "|".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 29,
+                token: Token::BracketOpen,
+                lexeme: "[".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 30,
+                token: Token::Characters,
+                lexeme: "digit".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 35,
+                token: Token::BracketClose,
+                lexeme: "]".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 36,
+                token: Token::ParenClose,
+                lexeme: ")".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 37,
+                token: Token::Star,
+                lexeme: "*".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 38,
+                token: Token::Characters,
+                lexeme: " ".to_string(),
+                line: 4,
+            },
+            TokenEntry {
+                col: 39,
+                token: Token::ForwardSlash,
+                lexeme: "/".to_string(),
+                line: 4,
             },
         ];
-        assert_eq!(result_tokens, expected_tokens)
+
+        for it in lexer.zip(expected_tokens.iter()) {
+            let (result_token, expected_token) = it;
+            assert_eq!(result_token, *expected_token)
+        }
     }
 
     #[test]
@@ -474,7 +677,7 @@ ignore /[whitespace]+/
             col: 0,
             line: 1,
             lexeme: "\n".to_string(),
-            token: Token::Character,
+            token: Token::Characters,
         };
         assert_eq!(lexer.next(), Some(expected_token_entry));
     }
@@ -496,7 +699,7 @@ ignore /[whitespace]+/
                 col: 0,
                 line: 0,
                 lexeme: expected_lexeme.to_string(),
-                token: Token::Character,
+                token: Token::Characters,
             };
             assert_equal(token_result, Some(expected_token_entry));
         }

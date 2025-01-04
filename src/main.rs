@@ -1,6 +1,3 @@
-use std::fs::File;
-use std::io::BufReader;
-
 mod lexer;
 
 pub fn main() {
