@@ -22,6 +22,7 @@ enum Token {
     ForwardSlash,
     Characters,
     Comma,
+    Space,
 }
 
 /// Token + metadata parser uses
@@ -66,12 +67,17 @@ struct Transition {
     return_token: Option<Token>,
 }
 
+struct LexerOptions {
+    capture_whitespace: bool,
+}
+
 struct Lexer {
     state: State,
     input: Vec<char>,
     current_line: usize,
     current_col: usize,
     pos: usize,
+    options: LexerOptions,
 }
 
 fn evaluate_escape_characters(lexeme: &str) -> String {
@@ -93,6 +99,9 @@ impl Lexer {
             current_line: 0,
             current_col: 0,
             pos: 0,
+            options: LexerOptions {
+                capture_whitespace: false,
+            },
         }
     }
 }
@@ -127,10 +136,17 @@ impl Iterator for Lexer {
             let transition = match self.state {
                 State::Initial => match *c {
                     ' ' => {
-                        lexeme.clear();
-                        Transition {
-                            next_state: None,
-                            return_token: None,
+                        if self.options.capture_whitespace {
+                            Transition {
+                                next_state: None,
+                                return_token: Some(Token::Space),
+                            }
+                        } else {
+                            lexeme.clear();
+                            Transition {
+                                next_state: None,
+                                return_token: None,
+                            }
                         }
                     }
                     '\n' => Transition {
@@ -343,8 +359,7 @@ class whitespace [\\n\\t\\f\\v\\r\\ ]
 token Ident /[alpha]([alpha]|[digit])* /
 ignore /[whitespace]+/
 ";
-        let lexer = Lexer::from_string(input);
-        // let result_tokens = lexer.collect_vec();
+        let mut lexer = Lexer::from_string(input);
         let expected_tokens = vec![
             TokenEntry {
                 col: 0,
@@ -610,9 +625,20 @@ ignore /[whitespace]+/
                 lexeme: "*".to_string(),
                 line: 4,
             },
+        ];
+
+        for expected_token in expected_tokens.iter() {
+            let result_token = lexer.next();
+            assert_ne!(result_token, None);
+            assert_eq!(result_token.unwrap(), *expected_token)
+        }
+
+        lexer.options.capture_whitespace = true;
+
+        let expected_tokens_cont = vec![
             TokenEntry {
                 col: 38,
-                token: Token::Characters,
+                token: Token::Space,
                 lexeme: " ".to_string(),
                 line: 4,
             },
@@ -624,9 +650,10 @@ ignore /[whitespace]+/
             },
         ];
 
-        for it in lexer.zip(expected_tokens.iter()) {
-            let (result_token, expected_token) = it;
-            assert_eq!(result_token, *expected_token)
+        for expected_token in expected_tokens_cont.iter() {
+            let result_token = lexer.next();
+            assert_ne!(result_token, None);
+            assert_eq!(result_token.unwrap(), *expected_token)
         }
     }
 
