@@ -4,7 +4,7 @@ extern crate itertools;
 use itertools::Itertools;
 
 #[derive(Debug, PartialEq)]
-enum Token {
+pub enum Token {
     Class,
     Token,
     Ignore,
@@ -23,15 +23,16 @@ enum Token {
     Characters,
     Comma,
     Space,
+    EOI
 }
 
 /// Token + metadata parser uses
 #[derive(Debug, PartialEq)]
-struct TokenEntry {
-    token: Token,
-    lexeme: String,
-    line: usize,
-    col: usize,
+pub struct TokenEntry {
+    pub token: Token,
+    pub lexeme: String,
+    pub line: usize,
+    pub col: usize,
 }
 
 /// States for the tokenizer finite state machine (FSM)
@@ -71,7 +72,7 @@ struct LexerOptions {
     capture_whitespace: bool,
 }
 
-struct Lexer {
+pub struct Lexer {
     state: State,
     input: Vec<char>,
     current_line: usize,
@@ -106,10 +107,10 @@ impl Lexer {
     }
 }
 
-impl Iterator for Lexer {
-    type Item = TokenEntry;
+type Item = TokenEntry;
+impl Lexer {
 
-    fn next(&mut self) -> Option<Self::Item> {
+    pub fn get_token(&mut self) -> TokenEntry {
         let mut lexeme = String::new();
 
         let rewind = |_self: &mut Self, _lexeme: &mut String| {
@@ -334,11 +335,11 @@ impl Iterator for Lexer {
 
             if let Some(rt) = return_token {
                 println!("Returning token: {:?}", rt);
-                return Some(rt);
+                return rt;
             }
         }
 
-        None
+        TokenEntry { token: Token::EOI, lexeme: String::new(), line: 99999, col: 99999 }
     }
 }
 
@@ -628,9 +629,8 @@ ignore /[whitespace]+/
         ];
 
         for expected_token in expected_tokens.iter() {
-            let result_token = lexer.next();
-            assert_ne!(result_token, None);
-            assert_eq!(result_token.unwrap(), *expected_token)
+            let result_token = lexer.get_token();
+            assert_eq!(result_token, *expected_token)
         }
 
         lexer.options.capture_whitespace = true;
@@ -648,12 +648,17 @@ ignore /[whitespace]+/
                 lexeme: "/".to_string(),
                 line: 4,
             },
+            TokenEntry {
+            col: 99999,
+            token: Token::EOI,
+            lexeme: String::new(),
+            line: 99999,
+            },
         ];
 
         for expected_token in expected_tokens_cont.iter() {
-            let result_token = lexer.next();
-            assert_ne!(result_token, None);
-            assert_eq!(result_token.unwrap(), *expected_token)
+            let result_token = lexer.get_token();
+            assert_eq!(result_token, *expected_token)
         }
     }
 
@@ -691,8 +696,8 @@ ignore /[whitespace]+/
 
         for (input, expected_token_entry) in cases {
             let mut lexer = Lexer::from_string(input);
-            let token_result = lexer.next();
-            assert_equal(token_result, Some(expected_token_entry));
+            let token_result = lexer.get_token();
+            assert_eq!(token_result, expected_token_entry);
         }
     }
 
@@ -706,7 +711,7 @@ ignore /[whitespace]+/
             lexeme: "\n".to_string(),
             token: Token::Characters,
         };
-        assert_eq!(lexer.next(), Some(expected_token_entry));
+        assert_eq!(lexer.get_token(), expected_token_entry);
     }
 
     #[test]
@@ -721,14 +726,14 @@ ignore /[whitespace]+/
 
         for (input, expected_lexeme) in cases {
             let mut lexer = Lexer::from_string(input);
-            let token_result = lexer.next();
+            let token_result = lexer.get_token();
             let expected_token_entry = TokenEntry {
                 col: 0,
                 line: 0,
                 lexeme: expected_lexeme.to_string(),
                 token: Token::Characters,
             };
-            assert_equal(token_result, Some(expected_token_entry));
+            assert_eq!(token_result, expected_token_entry);
         }
     }
 }
