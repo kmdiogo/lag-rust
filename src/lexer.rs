@@ -23,7 +23,7 @@ pub enum Token {
     Characters,
     Comma,
     Space,
-    EOI
+    EOI,
 }
 
 /// Token + metadata parser uses
@@ -109,7 +109,6 @@ impl Lexer {
 
 type Item = TokenEntry;
 impl Lexer {
-
     pub fn get_token(&mut self) -> TokenEntry {
         let mut lexeme = String::new();
 
@@ -339,7 +338,12 @@ impl Lexer {
             }
         }
 
-        TokenEntry { token: Token::EOI, lexeme: String::new(), line: 99999, col: 99999 }
+        TokenEntry {
+            token: Token::EOI,
+            lexeme: String::new(),
+            line: 99999,
+            col: 99999,
+        }
     }
 }
 
@@ -648,15 +652,67 @@ ignore /[whitespace]+/
                 lexeme: "/".to_string(),
                 line: 4,
             },
-            TokenEntry {
-            col: 99999,
-            token: Token::EOI,
-            lexeme: String::new(),
-            line: 99999,
-            },
         ];
 
         for expected_token in expected_tokens_cont.iter() {
+            let result_token = lexer.get_token();
+            assert_eq!(result_token, *expected_token)
+        }
+
+        let expected_tokens_final = vec![
+            TokenEntry {
+                col: 0,
+                token: Token::Ignore,
+                lexeme: "ignore".to_string(),
+                line: 5,
+            },
+            TokenEntry {
+                col: 7,
+                token: Token::ForwardSlash,
+                lexeme: "/".to_string(),
+                line: 5,
+            },
+            TokenEntry {
+                col: 8,
+                token: Token::BracketOpen,
+                lexeme: "[".to_string(),
+                line: 5,
+            },
+            TokenEntry {
+                col: 9,
+                token: Token::Characters,
+                lexeme: "whitespace".to_string(),
+                line: 5,
+            },
+            TokenEntry {
+                col: 19,
+                token: Token::BracketClose,
+                lexeme: "]".to_string(),
+                line: 5,
+            },
+            TokenEntry {
+                col: 20,
+                token: Token::Plus,
+                lexeme: "+".to_string(),
+                line: 5,
+            },
+            TokenEntry {
+                col: 21,
+                token: Token::ForwardSlash,
+                lexeme: "/".to_string(),
+                line: 5,
+            },
+            TokenEntry {
+                col: 99999,
+                token: Token::EOI,
+                lexeme: String::new(),
+                line: 99999,
+            },
+        ];
+
+        lexer.options.capture_whitespace = false;
+
+        for expected_token in expected_tokens_final.iter() {
             let result_token = lexer.get_token();
             assert_eq!(result_token, *expected_token)
         }
