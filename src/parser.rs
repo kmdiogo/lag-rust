@@ -56,8 +56,9 @@ impl Parser {
             return false;
         }
 
+        let current_class_name = self.current_token.lexeme;
         self.class_lookup_table
-            .insert(self.current_token.lexeme, Vec::new());
+            .insert(current_class_name, Vec::new());
 
         self.current_token = self.lexer.get_token();
 
@@ -69,7 +70,7 @@ impl Parser {
 
         self.current_token = self.lexer.get_token();
 
-        if !Parser::match_c_item_list(self) {
+        if !Parser::match_c_item_list(self, &current_class_name) {
             return false;
         }
 
@@ -83,9 +84,29 @@ impl Parser {
         return true;
     }
 
-    fn match_token_stmt(&mut self) -> bool {}
+    fn match_c_item_list(&mut self, class_name: &str) -> bool {
+        if !Parser::match_c_item(self, class_name) {
+            return true;
+        }
+        return Parser::match_c_item_list(self, class_name);
+    }
 
-    fn match_ignore_stmt(&mut self) -> bool {}
+    fn match_c_item(&mut self, class_name: &str) -> bool {
+        self.current_token = self.lexer.get_token();
+        if self.current_token.token != Token::Characters {
+            return false;
+        }
+
+        if self.lexer.peek_token().token == Token::Dash {}
+    }
+
+    fn match_token_stmt(&mut self) -> bool {
+        return true;
+    }
+
+    fn match_ignore_stmt(&mut self) -> bool {
+        return true;
+    }
 }
 
 impl Parser {
@@ -94,4 +115,3 @@ impl Parser {
         Parser::match_stmt_list(self);
     }
 }
-

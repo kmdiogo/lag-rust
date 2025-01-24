@@ -345,6 +345,13 @@ impl Lexer {
             col: 99999,
         }
     }
+
+    pub fn peek_token(&mut self) -> TokenEntry {
+        let initial_pos = self.pos;
+        let token = Lexer::get_token(self);
+        self.pos = initial_pos;
+        return token;
+    }
 }
 
 #[cfg(test)]
