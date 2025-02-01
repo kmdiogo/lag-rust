@@ -29,7 +29,7 @@ fn is_identifier(lexeme: &str) -> bool {
 
 impl Parser {
     fn match_stmt_list(&mut self) -> bool {
-        if self.current_token.token == Token::EOI {
+        if self.lexer.peek_token().token == Token::EOI {
             return true;
         }
         if !Parser::match_stmt(self) {
@@ -44,15 +44,14 @@ impl Parser {
     }
 
     fn match_class_stmt(&mut self) -> bool {
-        if self.current_token.token != Token::Class {
+        if self.lexer.peek_token().token != Token::Class {
             return false;
         }
+        self.lexer.get_token();
 
-        self.current_token = self.lexer.get_token();
-
-        if self.current_token.token != Token::Characters
-            || !is_identifier(&self.current_token.lexeme)
-        {
+        let lookahead = self.lexer.peek_token();
+        if lookahead.token != Token::Characters || !is_identifier(&lookahead.lexeme) {
+            return Error();
             return false;
         }
 
@@ -111,7 +110,6 @@ impl Parser {
 
 impl Parser {
     fn parse(&mut self) {
-        self.current_token = self.lexer.get_token();
         Parser::match_stmt_list(self);
     }
 }
