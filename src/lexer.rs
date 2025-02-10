@@ -1,7 +1,8 @@
-use core::fmt;
-use std::char;
 extern crate itertools;
+use core::fmt;
 use itertools::Itertools;
+use log::debug;
+use std::char;
 
 #[derive(Debug, PartialEq)]
 pub enum Token {
@@ -21,7 +22,7 @@ pub enum Token {
     Question,
     ForwardSlash,
     Characters,
-    Comma,
+    CharacterRange,
     Space,
     EOI,
 }
@@ -40,6 +41,7 @@ pub struct TokenEntry {
 enum State {
     Initial,
     Characters,
+    CharacterRange,
     Comment,
     // set token states
     BracketOpen,
@@ -58,6 +60,7 @@ impl fmt::Display for State {
             State::ForwardSlash => "ForwardSlash",
             State::Escape => "Escape",
             State::Characters => "Characters",
+            State::CharacterRange => "CharacterRange",
         };
         text.fmt(f)
     }
@@ -107,7 +110,6 @@ impl Lexer {
     }
 }
 
-type Item = TokenEntry;
 impl Lexer {
     pub fn get_token(&mut self) -> TokenEntry {
         let mut lexeme = String::new();
@@ -118,17 +120,17 @@ impl Lexer {
             _lexeme.pop();
         };
 
-        println!("{:-^60}", "-");
-        println!(
+        debug!("{:-^60}", "-");
+        debug!(
             "{0: <20} | {1: <10} | {2: <10} | {3: <10} | {4: <10}",
             "state", "line", "col", "lexeme", "position"
         );
         while self.pos < self.input.len() {
             let c = self.input.get(self.pos).unwrap();
-            // let lookahead = self.input.get(self.pos + 1);
+            let lookahead = self.input.get(self.pos + 1);
             lexeme.push(*c);
 
-            println!(
+            debug!(
                 "{0: <20} | {1: <10} | {2: <10} | {3: <10} | {4: <10}",
                 self.state, self.current_line, self.current_col, lexeme, self.pos
             );
@@ -197,19 +199,27 @@ impl Lexer {
                         next_state: None,
                         return_token: Some(Token::Pipe),
                     },
-                    ',' => Transition {
-                        next_state: None,
-                        return_token: Some(Token::Comma),
-                    },
                     _char => Transition {
                         next_state: Some(State::Characters),
                         return_token: None,
                     },
                 },
                 State::Characters => {
-                    if c.is_alphanumeric() {
+                    // Need to backtrack to account for upcoming character range
+                    if lookahead.is_some() && *lookahead.unwrap() == '-' {
+                        rewind(self, &mut lexeme);
+                        Transition {
+                            next_state: Some(State::Initial),
+                            return_token: Some(Token::Characters),
+                        }
+                    } else if c.is_alphanumeric() {
                         Transition {
                             next_state: None,
+                            return_token: None,
+                        }
+                    } else if *c == '-' {
+                        Transition {
+                            next_state: Some(State::CharacterRange),
                             return_token: None,
                         }
                     } else {
@@ -283,6 +293,10 @@ impl Lexer {
                         }
                     }
                 },
+                State::CharacterRange => Transition {
+                    next_state: Some(State::Initial),
+                    return_token: Some(Token::CharacterRange),
+                },
             };
 
             // Perform actual state transition
@@ -333,7 +347,7 @@ impl Lexer {
             self.pos += 1;
 
             if let Some(rt) = return_token {
-                println!("Returning token: {:?}", rt);
+                debug!("Returning token: {:?}", rt);
                 return rt;
             }
         }
@@ -356,15 +370,11 @@ impl Lexer {
 
 #[cfg(test)]
 mod tests {
-    use itertools::assert_equal;
-
     use super::*;
 
     #[test]
-    fn test_cpp_identifier_definition() {
-        // TODO: how to disambiguate identifiers and characters (ex. "a-zA" should be
-        // [Character, Dash, Character] but we're getting [Character, Dash, Id])
-        let input = "class alpha [a-z,A-z]
+    fn test_full_sample_input() {
+        let input = "class alpha [a-zA-Z]
 class digit [0-9]
 class whitespace [\\n\\t\\f\\v\\r\\ ]
 
@@ -393,48 +403,18 @@ ignore /[whitespace]+/
             },
             TokenEntry {
                 col: 13,
-                token: Token::Characters,
-                lexeme: "a".to_string(),
-                line: 0,
-            },
-            TokenEntry {
-                col: 14,
-                token: Token::Dash,
-                lexeme: "-".to_string(),
-                line: 0,
-            },
-            TokenEntry {
-                col: 15,
-                token: Token::Characters,
-                lexeme: "z".to_string(),
+                token: Token::CharacterRange,
+                lexeme: "a-z".to_string(),
                 line: 0,
             },
             TokenEntry {
                 col: 16,
-                token: Token::Comma,
-                lexeme: ",".to_string(),
-                line: 0,
-            },
-            TokenEntry {
-                col: 17,
-                token: Token::Characters,
-                lexeme: "A".to_string(),
-                line: 0,
-            },
-            TokenEntry {
-                col: 18,
-                token: Token::Dash,
-                lexeme: "-".to_string(),
+                token: Token::CharacterRange,
+                lexeme: "A-Z".to_string(),
                 line: 0,
             },
             TokenEntry {
                 col: 19,
-                token: Token::Characters,
-                lexeme: "z".to_string(),
-                line: 0,
-            },
-            TokenEntry {
-                col: 20,
                 token: Token::BracketClose,
                 lexeme: "]".to_string(),
                 line: 0,
@@ -459,20 +439,8 @@ ignore /[whitespace]+/
             },
             TokenEntry {
                 col: 13,
-                token: Token::Characters,
-                lexeme: "0".to_string(),
-                line: 1,
-            },
-            TokenEntry {
-                col: 14,
-                token: Token::Dash,
-                lexeme: "-".to_string(),
-                line: 1,
-            },
-            TokenEntry {
-                col: 15,
-                token: Token::Characters,
-                lexeme: "9".to_string(),
+                token: Token::CharacterRange,
+                lexeme: "0-9".to_string(),
                 line: 1,
             },
             TokenEntry {
@@ -644,8 +612,6 @@ ignore /[whitespace]+/
             assert_eq!(result_token, *expected_token)
         }
 
-        lexer.options.capture_whitespace = true;
-
         let expected_tokens_cont = vec![
             TokenEntry {
                 col: 38,
@@ -660,6 +626,8 @@ ignore /[whitespace]+/
                 line: 4,
             },
         ];
+
+        lexer.options.capture_whitespace = true;
 
         for expected_token in expected_tokens_cont.iter() {
             let result_token = lexer.get_token();
