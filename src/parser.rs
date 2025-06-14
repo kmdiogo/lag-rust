@@ -9,13 +9,13 @@ pub struct ParserErr {
 }
 
 pub enum ParseTreeNodeType {
-    ConcatNode,
-    CharacterNode,
-    IdNode,
-    PlusNode,
-    QuestionNode,
-    StarNode,
-    UnionNode,
+    Concat,
+    Character,
+    Id,
+    Plus,
+    Question,
+    Star,
+    Union,
 }
 
 pub struct ParseTreeNode {
@@ -219,16 +219,25 @@ impl Parser {
     }
 
     fn match_regex(&mut self) -> Result<Option<ParseTreeNode>, ParserErr> {
-        if !Parser::match_rterm(self)? {}
+        let parse_tree_root = ParseTreeNode {
+            left: None,
+            right: None,
+            node_type: ParseTreeNodeType::Union,
+        };
+        if Parser::match_rterm(self, &parse_tree_root)?.is_none() {
+            return Ok(None);
+        }
+
+        while self.lexer.peek_token().token == Token::Pipe {}
     }
 
-    fn match_rterm(&mut self) -> Result<ParseTreeNode, ParserErr> {}
+    fn match_rterm(&mut self, node: &ParseTreeNode) -> Result<Option<ParseTreeNode>, ParserErr> {}
 
-    fn match_rclosure(&mut self) -> Result<ParseTreeNode, ParserErr> {}
+    fn match_rclosure(&mut self, node: &ParseTreeNode) -> Result<ParseTreeNode, ParserErr> {}
 
-    fn match_rfactor(&mut self) -> Result<ParseTreeNode, ParserErr> {}
+    fn match_rfactor(&mut self, node: &ParseTreeNode) -> Result<ParseTreeNode, ParserErr> {}
 
-    fn match_ignore_stmt(&mut self) -> Result<bool, ParserErr> {
+    fn match_ignore_stmt(&mut self, node: &ParseTreeNode) -> Result<bool, ParserErr> {
         return Ok(true);
     }
 }
