@@ -8,9 +8,26 @@ pub struct ParserErr {
     pub token: TokenEntry,
 }
 
+pub enum ParseTreeNodeType {
+    ConcatNode,
+    CharacterNode,
+    IdNode,
+    PlusNode,
+    QuestionNode,
+    StarNode,
+    UnionNode,
+}
+
+pub struct ParseTreeNode {
+    pub node_type: ParseTreeNodeType,
+    pub left: Option<Box<ParseTreeNode>>,
+    pub right: Option<Box<ParseTreeNode>>,
+}
+
 pub struct Parser {
     lexer: Lexer,
     class_lookup_table: HashMap<String, HashSet<char>>,
+    token_parse_trees: HashMap<String, ParseTreeNode>,
 }
 
 fn is_identifier(lexeme: &str) -> bool {
@@ -131,7 +148,7 @@ impl Parser {
             let _dash = char_iter.next().unwrap();
             let range_end = char_iter.next().unwrap();
             if range_start as u32 > range_end as u32 {
-                return Err(ParserErr{
+                return Err(ParserErr {
                     message: format!("Invalid character range '{}'. Starting character must come before the end character", current_token.lexeme),
                     token: current_token,
                 });
@@ -174,35 +191,42 @@ impl Parser {
             });
         }
 
-        // Initialize character vector for this defined class that will hold the character set
-        let current_class = self.lexer.get_token();
-        self.class_lookup_table
-            .insert(current_class.lexeme.to_string(), HashSet::new());
-
-        let set_start = self.lexer.get_token();
-
-        if set_start.token != Token::BracketOpen && set_start.token != Token::BracketOpenNegate {
+        let regex_begin = self.lexer.get_token();
+        if regex_begin.token != Token::ForwardSlash {
             return Err(ParserErr {
-                message: format!("Expected '[' but found {} instead", set_start.lexeme),
-                token: set_start,
+                message: format!(
+                    "Unexpected token: '{}'. Regex definitions must start with '/'.",
+                    regex_begin.lexeme
+                ),
+                token: regex_begin,
             });
         }
 
-        let matched_c_item_list = Parser::match_c_item_list(self, &current_class.lexeme)?;
-        if !matched_c_item_list {
-            return Ok(false);
-        }
+        let regex_parse_tree = Parser::match_regex(self);
 
-        let set_end = self.lexer.get_token();
-        if set_end.token != Token::BracketClose && set_end.token != Token::DashBracketClose {
+        let regex_end = self.lexer.peek_token();
+        if regex_end.token != Token::ForwardSlash {
             return Err(ParserErr {
-                message: format!("Expected ']' but found {} instead", set_start.lexeme),
-                token: set_end,
+                message: format!(
+                    "Unexpected token: '{}'. Regex definitions must end with '/'.",
+                    regex_end.lexeme
+                ),
+                token: regex_end,
             });
         }
 
-        return Ok(true);
+        Ok(true)
     }
+
+    fn match_regex(&mut self) -> Result<Option<ParseTreeNode>, ParserErr> {
+        if !Parser::match_rterm(self)? {}
+    }
+
+    fn match_rterm(&mut self) -> Result<ParseTreeNode, ParserErr> {}
+
+    fn match_rclosure(&mut self) -> Result<ParseTreeNode, ParserErr> {}
+
+    fn match_rfactor(&mut self) -> Result<ParseTreeNode, ParserErr> {}
 
     fn match_ignore_stmt(&mut self) -> Result<bool, ParserErr> {
         return Ok(true);
