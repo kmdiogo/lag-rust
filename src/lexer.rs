@@ -22,6 +22,7 @@ pub enum Token {
     Question,
     ForwardSlash,
     Characters,
+    SingleCharacter,
     CharacterRange,
     Space,
     EOI,
@@ -73,6 +74,7 @@ struct Transition {
 
 struct LexerOptions {
     capture_whitespace: bool,
+    capture_single_char: bool,
 }
 
 pub struct Lexer {
@@ -105,6 +107,7 @@ impl Lexer {
             pos: 0,
             options: LexerOptions {
                 capture_whitespace: false,
+                capture_single_char: false,
             },
         }
     }
@@ -199,10 +202,19 @@ impl Lexer {
                         next_state: None,
                         return_token: Some(Token::Pipe),
                     },
-                    _char => Transition {
-                        next_state: Some(State::Characters),
-                        return_token: None,
-                    },
+                    _char => {
+                        if self.options.capture_single_char {
+                            Transition {
+                                next_state: None,
+                                return_token: Some(Token::Characters),
+                            }
+                        } else {
+                            Transition {
+                                next_state: Some(State::Characters),
+                                return_token: None,
+                            }
+                        }
+                    }
                 },
                 State::Characters => {
                     // Need to backtrack to account for upcoming character range
@@ -352,11 +364,19 @@ impl Lexer {
             }
         }
 
-        TokenEntry {
-            token: Token::EOI,
-            lexeme: String::new(),
-            line: 99999,
-            col: 99999,
+        match self.state {
+            State::ForwardSlash => TokenEntry {
+                token: Token::ForwardSlash,
+                lexeme: "/".to_owned(),
+                line: self.current_line,
+                col: self.current_col - 1,
+            },
+            _ => TokenEntry {
+                token: Token::EOI,
+                lexeme: String::new(),
+                line: 99999,
+                col: 99999,
+            },
         }
     }
 
@@ -743,6 +763,89 @@ ignore /[whitespace]+/
             token: Token::Characters,
         };
         assert_eq!(lexer.get_token(), expected_token_entry);
+    }
+
+    #[test]
+    fn test_single_char_capture() {
+        let input = "/(abc)[identifier]/";
+        let mut lexer = Lexer::from_string(input);
+        lexer.options.capture_single_char = true;
+        let expected_tokens = vec![
+            TokenEntry {
+                col: 0,
+                token: Token::ForwardSlash,
+                lexeme: "/".to_string(),
+                line: 0,
+            },
+            TokenEntry {
+                col: 1,
+                token: Token::ParenOpen,
+                lexeme: "(".to_string(),
+                line: 0,
+            },
+            TokenEntry {
+                col: 2,
+                token: Token::Characters,
+                lexeme: "a".to_string(),
+                line: 0,
+            },
+            TokenEntry {
+                col: 3,
+                token: Token::Characters,
+                lexeme: "b".to_string(),
+                line: 0,
+            },
+            TokenEntry {
+                col: 4,
+                token: Token::Characters,
+                lexeme: "c".to_string(),
+                line: 0,
+            },
+            TokenEntry {
+                col: 5,
+                token: Token::ParenClose,
+                lexeme: ")".to_string(),
+                line: 0,
+            },
+        ];
+
+        for expected_token in expected_tokens.iter() {
+            let result_token = lexer.get_token();
+            assert_eq!(result_token, *expected_token)
+        }
+
+        lexer.options.capture_single_char = false;
+        let expected_tokens_final = vec![
+            TokenEntry {
+                col: 6,
+                token: Token::BracketOpen,
+                lexeme: "[".to_string(),
+                line: 0,
+            },
+            TokenEntry {
+                col: 7,
+                token: Token::Characters,
+                lexeme: "identifier".to_string(),
+                line: 0,
+            },
+            TokenEntry {
+                col: 17,
+                token: Token::BracketClose,
+                lexeme: "]".to_string(),
+                line: 0,
+            },
+            TokenEntry {
+                col: 18,
+                token: Token::ForwardSlash,
+                lexeme: "/".to_string(),
+                line: 0,
+            },
+        ];
+
+        for expected_token in expected_tokens_final.iter() {
+            let result_token = lexer.get_token();
+            assert_eq!(result_token, *expected_token)
+        }
     }
 
     #[test]

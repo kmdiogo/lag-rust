@@ -16,12 +16,14 @@ pub enum ParseTreeNodeType {
     Question,
     Star,
     Union,
+    End,
 }
 
 pub struct ParseTreeNode {
     pub node_type: ParseTreeNodeType,
-    pub left: Option<Box<ParseTreeNode>>,
-    pub right: Option<Box<ParseTreeNode>>,
+    pub left: Box<Option<ParseTreeNode>>,
+    pub right: Box<Option<ParseTreeNode>>,
+    pub value: String,
 }
 
 pub struct Parser {
@@ -202,7 +204,17 @@ impl Parser {
             });
         }
 
-        let regex_parse_tree = Parser::match_regex(self);
+        let mut parse_tree_root = ParseTreeNode {
+            left: Box::new(Parser::match_regex(self)?),
+            right: Box::new(Some(ParseTreeNode {
+                node_type: ParseTreeNodeType::End,
+                left: Box::new(None),
+                right: Box::new(None),
+                value: "".to_string(),
+            })),
+            node_type: ParseTreeNodeType::Concat,
+            value: "".to_string(),
+        };
 
         let regex_end = self.lexer.peek_token();
         if regex_end.token != Token::ForwardSlash {
@@ -219,25 +231,20 @@ impl Parser {
     }
 
     fn match_regex(&mut self) -> Result<Option<ParseTreeNode>, ParserErr> {
-        let parse_tree_root = ParseTreeNode {
-            left: None,
-            right: None,
-            node_type: ParseTreeNodeType::Union,
-        };
-        if Parser::match_rterm(self, &parse_tree_root)?.is_none() {
+        if Parser::match_rterm(self)?.is_none() {
             return Ok(None);
         }
 
         while self.lexer.peek_token().token == Token::Pipe {}
     }
 
-    fn match_rterm(&mut self, node: &ParseTreeNode) -> Result<Option<ParseTreeNode>, ParserErr> {}
+    fn match_rterm(&mut self) -> Result<Option<ParseTreeNode>, ParserErr> {}
 
-    fn match_rclosure(&mut self, node: &ParseTreeNode) -> Result<ParseTreeNode, ParserErr> {}
+    fn match_rclosure(&mut self) -> Result<ParseTreeNode, ParserErr> {}
 
-    fn match_rfactor(&mut self, node: &ParseTreeNode) -> Result<ParseTreeNode, ParserErr> {}
+    fn match_rfactor(&mut self) -> Result<ParseTreeNode, ParserErr> {}
 
-    fn match_ignore_stmt(&mut self, node: &ParseTreeNode) -> Result<bool, ParserErr> {
+    fn match_ignore_stmt(&mut self) -> Result<bool, ParserErr> {
         return Ok(true);
     }
 }
