@@ -22,9 +22,7 @@ pub enum Token {
     Question,
     ForwardSlash,
     Characters,
-    SingleCharacter,
     CharacterRange,
-    Space,
     EOI,
 }
 
@@ -38,7 +36,7 @@ pub struct TokenEntry {
 }
 
 /// States for the tokenizer finite state machine (FSM)
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 enum State {
     Initial,
     Characters,
@@ -50,6 +48,9 @@ enum State {
     ForwardSlash,
     Escape,
 }
+
+const EOI_COL: usize = 999999;
+const EOI_LINE: usize = 999999;
 
 impl fmt::Display for State {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -72,9 +73,10 @@ struct Transition {
     return_token: Option<Token>,
 }
 
-struct LexerOptions {
-    capture_whitespace: bool,
-    capture_single_char: bool,
+#[derive(Debug, PartialEq)]
+pub enum LexerMode {
+    Default,
+    Regex,
 }
 
 pub struct Lexer {
@@ -83,7 +85,7 @@ pub struct Lexer {
     current_line: usize,
     current_col: usize,
     pos: usize,
-    options: LexerOptions,
+    pub mode: LexerMode,
 }
 
 fn evaluate_escape_characters(lexeme: &str) -> String {
@@ -105,10 +107,7 @@ impl Lexer {
             current_line: 0,
             current_col: 0,
             pos: 0,
-            options: LexerOptions {
-                capture_whitespace: false,
-                capture_single_char: false,
-            },
+            mode: LexerMode::Default,
         }
     }
 }
@@ -141,10 +140,10 @@ impl Lexer {
             let transition = match self.state {
                 State::Initial => match *c {
                     ' ' => {
-                        if self.options.capture_whitespace {
+                        if self.mode == LexerMode::Regex {
                             Transition {
                                 next_state: None,
-                                return_token: Some(Token::Space),
+                                return_token: Some(Token::Characters),
                             }
                         } else {
                             lexeme.clear();
@@ -154,7 +153,7 @@ impl Lexer {
                             }
                         }
                     }
-                    '\n' => Transition {
+                    '\n' | '\r' => Transition {
                         next_state: None,
                         return_token: None,
                     },
@@ -203,7 +202,7 @@ impl Lexer {
                         return_token: Some(Token::Pipe),
                     },
                     _char => {
-                        if self.options.capture_single_char {
+                        if self.mode == LexerMode::Regex {
                             Transition {
                                 next_state: None,
                                 return_token: Some(Token::Characters),
@@ -365,25 +364,30 @@ impl Lexer {
         }
 
         match self.state {
-            State::ForwardSlash => TokenEntry {
-                token: Token::ForwardSlash,
-                lexeme: "/".to_owned(),
-                line: self.current_line,
-                col: self.current_col - 1,
-            },
+            State::ForwardSlash => {
+                self.state = State::Dash;
+                TokenEntry {
+                    token: Token::ForwardSlash,
+                    lexeme: "/".to_owned(),
+                    line: self.current_line,
+                    col: self.current_col - 1,
+                }
+            }
             _ => TokenEntry {
                 token: Token::EOI,
                 lexeme: String::new(),
-                line: 99999,
-                col: 99999,
+                line: EOI_LINE,
+                col: EOI_COL,
             },
         }
     }
 
     pub fn peek_token(&mut self) -> TokenEntry {
         let initial_pos = self.pos;
+        let initial_state = self.state.clone();
         let token = Lexer::get_token(self);
-        self.pos = initial_pos;
+        self.pos = initial_pos.into();
+        self.state = initial_state;
         return token;
     }
 }
@@ -635,7 +639,7 @@ ignore /[whitespace]+/
         let expected_tokens_cont = vec![
             TokenEntry {
                 col: 38,
-                token: Token::Space,
+                token: Token::Characters,
                 lexeme: " ".to_string(),
                 line: 4,
             },
@@ -647,7 +651,7 @@ ignore /[whitespace]+/
             },
         ];
 
-        lexer.options.capture_whitespace = true;
+        lexer.mode = LexerMode::Regex;
 
         for expected_token in expected_tokens_cont.iter() {
             let result_token = lexer.get_token();
@@ -698,14 +702,14 @@ ignore /[whitespace]+/
                 line: 5,
             },
             TokenEntry {
-                col: 99999,
+                col: EOI_COL,
                 token: Token::EOI,
                 lexeme: String::new(),
-                line: 99999,
+                line: EOI_LINE,
             },
         ];
 
-        lexer.options.capture_whitespace = false;
+        lexer.mode = LexerMode::Default;
 
         for expected_token in expected_tokens_final.iter() {
             let result_token = lexer.get_token();
@@ -767,9 +771,9 @@ ignore /[whitespace]+/
 
     #[test]
     fn test_single_char_capture() {
-        let input = "/(abc)[identifier]/";
+        let input = "/(abc)|[identifier]/";
         let mut lexer = Lexer::from_string(input);
-        lexer.options.capture_single_char = true;
+        lexer.mode = LexerMode::Regex;
         let expected_tokens = vec![
             TokenEntry {
                 col: 0,
@@ -807,6 +811,12 @@ ignore /[whitespace]+/
                 lexeme: ")".to_string(),
                 line: 0,
             },
+            TokenEntry {
+                col: 6,
+                token: Token::Pipe,
+                lexeme: "|".to_string(),
+                line: 0,
+            },
         ];
 
         for expected_token in expected_tokens.iter() {
@@ -814,31 +824,37 @@ ignore /[whitespace]+/
             assert_eq!(result_token, *expected_token)
         }
 
-        lexer.options.capture_single_char = false;
+        lexer.mode = LexerMode::Default;
         let expected_tokens_final = vec![
             TokenEntry {
-                col: 6,
+                col: 7,
                 token: Token::BracketOpen,
                 lexeme: "[".to_string(),
                 line: 0,
             },
             TokenEntry {
-                col: 7,
+                col: 8,
                 token: Token::Characters,
                 lexeme: "identifier".to_string(),
                 line: 0,
             },
             TokenEntry {
-                col: 17,
+                col: 18,
                 token: Token::BracketClose,
                 lexeme: "]".to_string(),
                 line: 0,
             },
             TokenEntry {
-                col: 18,
+                col: 19,
                 token: Token::ForwardSlash,
                 lexeme: "/".to_string(),
                 line: 0,
+            },
+            TokenEntry {
+                col: EOI_COL,
+                token: Token::EOI,
+                lexeme: "".to_string(),
+                line: EOI_LINE,
             },
         ];
 

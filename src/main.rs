@@ -1,29 +1,39 @@
 mod lexer;
 mod parser;
 
+use crate::lexer::Lexer;
 use clap::Parser;
 use std::fs;
+use std::io::Read;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Path to the input file
     #[arg(short, long)]
     input_file: String,
+}
+
+fn get_input(input_file: &str) -> (String, String) {
+    (
+        fs::read_to_string(input_file).expect("Unable to open file."),
+        input_file.to_owned(),
+    )
 }
 
 pub fn main() {
     env_logger::init();
     let args = Args::parse();
+    let (text, filename) = get_input(args.input_file.as_ref());
+    let lexer = Lexer::from_string(&text);
+    let mut parser = parser::Parser::new(lexer);
 
-    let text_input = fs::read_to_string(&args.input_file).expect("Unable to open file.");
-    // let mut parser = parser::Parser::new(Lexer::from_string(&text_input));
-    // match parser.parse() {
-    //     Ok(false) => println!("parsing failed."),
-    //     Err(e) => {
-    //         println!("error: {}", e.message);
-    //         println!("\t{}:{}:{}", &args.input_file, e.token.line, e.token.col)
-    //     }
-    //     _ => {}
-    // }
+    println!("Parsing...");
+    match parser.parse() {
+        Ok(false) => println!("Parsing failed."),
+        Err(e) => {
+            println!("Parsing error. See below for details: \n\t{}", e.message);
+            println!("\t{}:{}:{}", &filename, e.token.line, e.token.col)
+        }
+        _ => {}
+    }
 }

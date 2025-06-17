@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::lexer::{Lexer, Token, TokenEntry};
+use crate::lexer::{Lexer, LexerMode, Token, TokenEntry};
 
 #[derive(Debug)]
 pub struct ParserErr {
@@ -8,6 +8,7 @@ pub struct ParserErr {
     pub token: TokenEntry,
 }
 
+#[derive(Debug)]
 pub enum ParseTreeNodeType {
     Concat,
     Character,
@@ -30,6 +31,7 @@ pub struct Parser {
     lexer: Lexer,
     class_lookup_table: HashMap<String, HashSet<char>>,
     token_parse_trees: HashMap<String, ParseTreeNode>,
+    ignore_parse_trees: Vec<ParseTreeNode>,
 }
 
 fn is_identifier(lexeme: &str) -> bool {
@@ -53,6 +55,7 @@ fn is_identifier(lexeme: &str) -> bool {
 
 impl Parser {
     fn match_stmt_list(&mut self) -> Result<bool, ParserErr> {
+        let t = self.lexer.peek_token();
         if self.lexer.peek_token().token == Token::EOI {
             return Ok(true);
         }
@@ -178,7 +181,7 @@ impl Parser {
         }
         self.lexer.get_token();
 
-        let identifier = self.lexer.peek_token();
+        let identifier = self.lexer.get_token();
         if identifier.token != Token::Characters {
             return Err(ParserErr {
                 message: format!("Unexpected token: '{}'", identifier.lexeme),
@@ -193,6 +196,26 @@ impl Parser {
             });
         }
 
+        let regex_node = Parser::match_regex_stmt(self)?;
+        self.token_parse_trees
+            .insert(identifier.lexeme.clone(), regex_node);
+
+        Ok(true)
+    }
+
+    fn match_ignore_stmt(&mut self) -> Result<bool, ParserErr> {
+        if self.lexer.peek_token().token != Token::Ignore {
+            return Ok(false);
+        }
+        self.lexer.get_token();
+
+        let regex_node = Parser::match_regex_stmt(self)?;
+        self.ignore_parse_trees.push(regex_node);
+
+        Ok(true)
+    }
+
+    fn match_regex_stmt(&mut self) -> Result<ParseTreeNode, ParserErr> {
         let regex_begin = self.lexer.get_token();
         if regex_begin.token != Token::ForwardSlash {
             return Err(ParserErr {
@@ -204,7 +227,7 @@ impl Parser {
             });
         }
 
-        let mut parse_tree_root = ParseTreeNode {
+        let parse_tree_root = ParseTreeNode {
             left: Box::new(Parser::match_regex(self)?),
             right: Box::new(Some(ParseTreeNode {
                 node_type: ParseTreeNodeType::End,
@@ -216,7 +239,7 @@ impl Parser {
             value: "".to_string(),
         };
 
-        let regex_end = self.lexer.peek_token();
+        let regex_end = self.lexer.get_token();
         if regex_end.token != Token::ForwardSlash {
             return Err(ParserErr {
                 message: format!(
@@ -227,25 +250,151 @@ impl Parser {
             });
         }
 
-        Ok(true)
+        Ok(parse_tree_root)
     }
 
     fn match_regex(&mut self) -> Result<Option<ParseTreeNode>, ParserErr> {
-        if Parser::match_rterm(self)?.is_none() {
-            return Ok(None);
-        }
-
-        while self.lexer.peek_token().token == Token::Pipe {}
+        let node = match Parser::match_rterm(self)? {
+            None => None,
+            Some(rterm) => {
+                if self.lexer.peek_token().token == Token::Pipe {
+                    self.lexer.get_token();
+                    Some(ParseTreeNode {
+                        node_type: ParseTreeNodeType::Union,
+                        left: Box::new(Some(rterm)),
+                        right: Box::new(Parser::match_regex(self)?),
+                        value: "".to_string(),
+                    })
+                } else {
+                    Some(rterm)
+                }
+            }
+        };
+        Ok(node)
     }
 
-    fn match_rterm(&mut self) -> Result<Option<ParseTreeNode>, ParserErr> {}
+    fn match_rterm(&mut self) -> Result<Option<ParseTreeNode>, ParserErr> {
+        let node = match Parser::match_rclosure(self)? {
+            None => None,
+            Some(rclosure) => {
+                let right = Parser::match_rterm(self)?;
+                match right {
+                    None => Some(rclosure),
+                    Some(right_node) => Some(ParseTreeNode {
+                        node_type: ParseTreeNodeType::Concat,
+                        left: Box::new(Some(rclosure)),
+                        right: Box::new(Some(right_node)),
+                        value: "".to_string(),
+                    }),
+                }
+            }
+        };
+        Ok(node)
+    }
 
-    fn match_rclosure(&mut self) -> Result<ParseTreeNode, ParserErr> {}
+    fn match_rclosure(&mut self) -> Result<Option<ParseTreeNode>, ParserErr> {
+        let node = match Parser::match_rfactor(self)? {
+            None => None,
+            Some(rfactor) => {
+                let operator_node = match self.lexer.peek_token().token {
+                    operator @ (Token::Star | Token::Plus | Token::Question) => {
+                        self.lexer.get_token();
+                        if operator == Token::Star {
+                            Some(ParseTreeNodeType::Star)
+                        } else if operator == Token::Plus {
+                            Some(ParseTreeNodeType::Plus)
+                        } else {
+                            Some(ParseTreeNodeType::Question)
+                        }
+                    }
+                    _ => None,
+                };
+                match operator_node {
+                    Some(node_type) => Some(ParseTreeNode {
+                        node_type: node_type,
+                        left: Box::new(Some(rfactor)),
+                        right: Box::new(None),
+                        value: "".to_string(),
+                    }),
+                    None => Some(rfactor),
+                }
+            }
+        };
+        Ok(node)
+    }
 
-    fn match_rfactor(&mut self) -> Result<ParseTreeNode, ParserErr> {}
+    fn match_rfactor(&mut self) -> Result<Option<ParseTreeNode>, ParserErr> {
+        self.lexer.mode = LexerMode::Regex;
+        let peek_token = self.lexer.peek_token();
 
-    fn match_ignore_stmt(&mut self) -> Result<bool, ParserErr> {
-        return Ok(true);
+        let node = match peek_token.token {
+            Token::Characters => {
+                assert_eq!(peek_token.lexeme.len(), 1, "Got unexpected multiple characters '{}' when lexer is in single char capture mode. This indicates a bug in the lexer.", peek_token.lexeme);
+                self.lexer.get_token();
+                Some(ParseTreeNode {
+                    node_type: ParseTreeNodeType::Character,
+                    left: Box::new(None),
+                    right: Box::new(None),
+                    value: peek_token.lexeme,
+                })
+            }
+            Token::BracketOpen => {
+                self.lexer.get_token();
+                self.lexer.mode = LexerMode::Default;
+                let id_token = self.lexer.get_token();
+
+                let id_token = match id_token.token {
+                    Token::Characters => {
+                        if !self.class_lookup_table.contains_key(&id_token.lexeme) {
+                            return Err(ParserErr {
+                                message: format!(
+                                    "Undefined class identifier '{}'",
+                                    id_token.lexeme
+                                ),
+                                token: id_token,
+                            });
+                        }
+                        let bracket_close_token = self.lexer.get_token();
+                        match bracket_close_token.token {
+                            Token::BracketClose => Some(ParseTreeNode {
+                                node_type: ParseTreeNodeType::Id,
+                                left: Box::new(None),
+                                right: Box::new(None),
+                                value: id_token.lexeme,
+                            }),
+                            _ => {
+                                return Err(ParserErr {
+                                    message: format!(
+                                    "Unexpected token: '{}'. Regex definitions must end with '/'.",
+                                    bracket_close_token.lexeme
+                                ),
+                                    token: bracket_close_token,
+                                })
+                            }
+                        }
+                    }
+                    _ => None,
+                };
+                self.lexer.mode = LexerMode::Regex;
+                id_token
+            }
+            Token::ParenOpen => {
+                self.lexer.get_token();
+                match Parser::match_regex(self)? {
+                    None => None,
+                    Some(inner_regex) => match self.lexer.peek_token().token {
+                        Token::ParenClose => {
+                            self.lexer.get_token();
+                            Some(inner_regex)
+                        }
+                        _ => None,
+                    },
+                }
+            }
+            _ => None,
+        };
+        self.lexer.mode = LexerMode::Default;
+        Ok(node)
     }
 }
 
@@ -257,6 +406,8 @@ impl Parser {
     pub fn new(lexer: Lexer) -> Self {
         Self {
             class_lookup_table: HashMap::new(),
+            token_parse_trees: HashMap::new(),
+            ignore_parse_trees: Vec::new(),
             lexer,
         }
     }
@@ -266,14 +417,32 @@ impl Parser {
 mod tests {
     use super::*;
 
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    fn setup() {
+        INIT.call_once(env_logger::init);
+    }
+
+    fn inorder_traversal(root: &ParseTreeNode) -> Vec<String> {
+        let mut result: Vec<String> = Vec::new();
+        fn helper(node: Option<&ParseTreeNode>, result: &mut Vec<String>) {
+            if let Some(n) = node {
+                helper((*n.left).as_ref(), result);
+                result.push(format!("{:?}({})", n.node_type, n.value));
+                helper((*n.right).as_ref(), result);
+            }
+        }
+        helper(Some(root), &mut result);
+        result
+    }
+
     #[test]
     fn test_match_class_stmt() {
-        env_logger::init();
+        setup();
         let lexer = Lexer::from_string("class alpha [a-cG-I_1-3z5]");
-        let mut parser = Parser {
-            class_lookup_table: HashMap::new(),
-            lexer,
-        };
+        let mut parser = Parser::new(lexer);
 
         let parse_result = parser.parse().unwrap();
         assert_eq!(parse_result, true);
@@ -282,5 +451,88 @@ mod tests {
             *parser.class_lookup_table.get("alpha").unwrap(),
             HashSet::from(['a', 'b', 'c', 'G', 'H', 'I', '_', '1', '2', '3', 'z', '5'])
         );
+    }
+
+    #[test]
+    fn test_token_stmt() {
+        setup();
+        let lexer = Lexer::from_string("token sample /(a|b)*/");
+        let mut parser = Parser::new(lexer);
+
+        let parse_result = parser.parse().unwrap();
+        assert_eq!(parse_result, true);
+        assert_eq!(parser.token_parse_trees.contains_key("sample"), true);
+        let parse_tree = parser.token_parse_trees.get("sample").unwrap();
+        assert_eq!(
+            inorder_traversal(parse_tree),
+            vec![
+                "Character(a)",
+                "Union()",
+                "Character(b)",
+                "Star()",
+                "Concat()",
+                "End()"
+            ]
+        )
+    }
+
+    #[test]
+    fn test_regex_undefined_identifier() {
+        setup();
+        let lexer = Lexer::from_string("ignore /[id_that_doesnt_exist/");
+        let mut parser = Parser::new(lexer);
+        let parse_result = parser.parse();
+        assert!(
+            parse_result.is_err(),
+            "Expected parsing to fail with a non-existent ID"
+        );
+        assert!(parse_result
+            .unwrap_err()
+            .message
+            .contains("Undefined class identifier"));
+    }
+
+    #[test]
+    fn test_regex_with_class() {
+        setup();
+        let input = "class alpha [a-zA-Z]
+ignore /[alpha]+/
+";
+        let lexer = Lexer::from_string(input);
+        let mut parser = Parser::new(lexer);
+        let parse_result = parser.parse().unwrap();
+        assert_eq!(parse_result, true);
+        assert_eq!(parser.ignore_parse_trees.len(), 1);
+        let parse_tree = &parser.ignore_parse_trees[0];
+        assert_eq!(
+            inorder_traversal(parse_tree),
+            vec!["Id(alpha)", "Plus()", "Concat()", "End()"]
+        )
+    }
+
+    #[test]
+    fn test_ignore_stmt() {
+        setup();
+        let lexer = Lexer::from_string("ignore /(a+|b*) /");
+        let mut parser = Parser::new(lexer);
+
+        let parse_result = parser.parse().unwrap();
+        assert_eq!(parse_result, true);
+        assert_eq!(parser.ignore_parse_trees.len(), 1);
+        let parse_tree = &parser.ignore_parse_trees[0];
+        assert_eq!(
+            inorder_traversal(parse_tree),
+            vec![
+                "Character(a)",
+                "Plus()",
+                "Union()",
+                "Character(b)",
+                "Star()",
+                "Concat()",
+                "Character( )",
+                "Concat()",
+                "End()"
+            ]
+        )
     }
 }
