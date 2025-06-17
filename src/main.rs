@@ -1,4 +1,5 @@
 mod lexer;
+mod parse_tree_node;
 mod parser;
 
 use crate::lexer::Lexer;
