@@ -1,11 +1,11 @@
 mod lexer;
-mod parse_tree_node;
 mod parser;
+mod regex_ast;
 
 use crate::lexer::Lexer;
+use crate::parser::parse;
 use clap::Parser;
 use std::fs;
-use std::io::Read;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -25,16 +25,18 @@ pub fn main() {
     env_logger::init();
     let args = Args::parse();
     let (text, filename) = get_input(args.input_file.as_ref());
-    let lexer = Lexer::from_string(&text);
-    let mut parser = parser::Parser::new(lexer);
+    let mut lexer = Lexer::from_string(&text);
 
     println!("Parsing...");
-    match parser.parse() {
-        Ok(false) => println!("Parsing failed."),
+    let parse_output = match parse(&mut lexer) {
+        Ok(output) => {
+            println!("Parsing successful.");
+            output
+        }
         Err(e) => {
             println!("Parsing error. See below for details: \n\t{}", e.message);
-            println!("\t{}:{}:{}", &filename, e.token.line, e.token.col)
+            println!("\t{}:{}:{}", &filename, e.token.line, e.token.col);
+            return;
         }
-        _ => {}
-    }
+    };
 }
