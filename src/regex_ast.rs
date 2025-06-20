@@ -44,7 +44,7 @@ pub struct ParseTreeNodeMeta {
 }
 
 pub type ParseTreeMeta = Arena<ParseTreeNodeMeta>;
-pub fn get_parse_tree_meta(tree: &ParseTree) -> ParseTreeMeta {
+pub fn get_parse_tree_meta(tree: &ParseTree, root: ObjRef) -> ParseTreeMeta {
     let mut meta: Vec<ParseTreeNodeMeta> = Vec::new();
     for i in 0..tree.size() {
         meta.push(ParseTreeNodeMeta {
@@ -98,12 +98,12 @@ pub fn get_parse_tree_meta(tree: &ParseTree) -> ParseTreeMeta {
                     false => left_meta.first_pos.clone(),
                 };
                 let last_pos = match right_meta.nullable {
-                    true => left_meta
+                    true => right_meta
                         .last_pos
-                        .union(&right_meta.last_pos)
+                        .union(&left_meta.last_pos)
                         .cloned()
                         .collect(),
-                    false => left_meta.last_pos.clone(),
+                    false => right_meta.last_pos.clone(),
                 };
                 meta[node_ref.0 as usize] = ParseTreeNodeMeta {
                     first_pos,
@@ -129,5 +129,50 @@ pub fn get_parse_tree_meta(tree: &ParseTree) -> ParseTreeMeta {
         }
     }
 
-    ParseTreeMeta::from_vec(meta)
+    calculate_meta(root, &mut meta, tree);
+    ParseTreeMeta::from(meta)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_tree_meta() {
+        // (a|b)*abb
+        let mut ast = ParseTree::default();
+        let a_char = ast.add(ParseTreeNode::Character("a".to_string()));
+        let b_char = ast.add(ParseTreeNode::Character("b".to_string()));
+        let union_node = ast.add(ParseTreeNode::Union {
+            left: a_char,
+            right: b_char,
+        });
+        let star_node = ast.add(ParseTreeNode::Star { child: union_node });
+        let a2_char = ast.add(ParseTreeNode::Character("a".to_string()));
+        let cat1_node = ast.add(ParseTreeNode::Concat {
+            left: star_node,
+            right: a2_char,
+        });
+        let b2_char = ast.add(ParseTreeNode::Character("b".to_string()));
+        let cat2_node = ast.add(ParseTreeNode::Concat {
+            left: cat1_node,
+            right: b2_char,
+        });
+        let b3_char = ast.add(ParseTreeNode::Character("b".to_string()));
+        let root = ast.add(ParseTreeNode::Concat {
+            left: cat2_node,
+            right: b3_char,
+        });
+
+        let meta = get_parse_tree_meta(&ast, root);
+        let meta_pool = meta.get_pool();
+        let root_meta = &meta_pool[root.0 as usize];
+        assert_eq!(meta.size(), ast.size());
+        assert_eq!(root_meta.nullable, false);
+        assert_eq!(
+            root_meta.first_pos,
+            HashSet::from([a_char, b_char, a2_char])
+        );
+        assert_eq!(root_meta.last_pos, HashSet::from([b3_char]))
+    }
 }

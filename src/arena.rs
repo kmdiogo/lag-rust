@@ -5,7 +5,7 @@ pub struct ObjRef(pub u32);
 pub struct Arena<T>(Vec<T>);
 
 impl<T> Arena<T> {
-    pub fn from_vec(vec: Vec<T>) -> Self {
+    pub fn from(vec: Vec<T>) -> Self {
         Self(vec)
     }
     /// Create an empty pool.
@@ -16,6 +16,10 @@ impl<T> Arena<T> {
     /// Dereference an object reference, obtaining the underlying `ParseTreeNode`.
     pub fn get(&self, obj_ref: ObjRef) -> &T {
         &self.0[obj_ref.0 as usize]
+    }
+
+    pub fn get_pool(&self) -> &Vec<T> {
+        &self.0
     }
 
     pub fn size(&self) -> usize {
