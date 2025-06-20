@@ -1,8 +1,8 @@
+use crate::arena::{Arena, ObjRef};
 use std::collections::HashSet;
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NodeRef(u32);
+pub type NodeRef = ObjRef;
 
 #[derive(Debug)]
 pub enum ParseTreeNode {
@@ -35,38 +35,7 @@ impl fmt::Display for ParseTreeNode {
     }
 }
 
-#[derive(Debug)]
-pub struct ParseTree(Vec<ParseTreeNode>);
-
-impl ParseTree {
-    /// Create an empty pool.
-    pub(crate) fn default() -> Self {
-        Self(Vec::new())
-    }
-
-    /// Dereference an AST node reference, obtaining the underlying `ParseTreeNode`.
-    pub fn get(&self, node_ref: NodeRef) -> &ParseTreeNode {
-        &self.0[node_ref.0 as usize]
-    }
-
-    pub fn get_root_ref(&self) -> Option<NodeRef> {
-        if self.0.len() == 0 {
-            return None;
-        }
-        Some(NodeRef((self.0.len() - 1) as u32))
-    }
-
-    pub fn size(&self) -> usize {
-        self.0.len()
-    }
-
-    /// Add a node to the tree and get a reference to it.
-    pub fn add(&mut self, node: ParseTreeNode) -> NodeRef {
-        let idx = self.0.len();
-        self.0.push(node);
-        NodeRef(idx.try_into().expect("too many exprs in the pool"))
-    }
-}
+pub type ParseTree = Arena<ParseTreeNode>;
 
 pub struct ParseTreeNodeMeta {
     nullable: bool,
@@ -74,9 +43,10 @@ pub struct ParseTreeNodeMeta {
     last_pos: HashSet<NodeRef>,
 }
 
-pub fn getParseTreeMeta(tree: &ParseTree) -> Vec<ParseTreeNodeMeta> {
+pub type ParseTreeMeta = Arena<ParseTreeNodeMeta>;
+pub fn get_parse_tree_meta(tree: &ParseTree) -> ParseTreeMeta {
     let mut meta: Vec<ParseTreeNodeMeta> = Vec::new();
-    for i in 0..tree.0.len() {
+    for i in 0..tree.size() {
         meta.push(ParseTreeNodeMeta {
             nullable: false,
             first_pos: HashSet::new(),
@@ -141,26 +111,23 @@ pub fn getParseTreeMeta(tree: &ParseTree) -> Vec<ParseTreeNodeMeta> {
                     nullable,
                 }
             }
-            ParseTreeNode::Star { child } => {
+            node @ (ParseTreeNode::Star { child }
+            | ParseTreeNode::Plus { child }
+            | ParseTreeNode::Question { child, .. }) => {
                 calculate_meta(*child, meta, ast);
                 let child_meta = &meta[child.0 as usize];
+                let nullable = match node {
+                    ParseTreeNode::Star { child: _ } | ParseTreeNode::Question { child: _ } => true,
+                    _ => false,
+                };
                 meta[node_ref.0 as usize] = ParseTreeNodeMeta {
                     last_pos: child_meta.last_pos.clone(),
                     first_pos: child_meta.first_pos.clone(),
-                    nullable: true,
-                }
-            }
-            ParseTreeNode::Plus { child } | ParseTreeNode::Question { child } => {
-                calculate_meta(*child, meta, ast);
-                let child_meta = &meta[child.0 as usize];
-                meta[node_ref.0 as usize] = ParseTreeNodeMeta {
-                    last_pos: child_meta.last_pos.clone(),
-                    first_pos: child_meta.first_pos.clone(),
-                    nullable: false,
+                    nullable,
                 }
             }
         }
     }
 
-    meta
+    ParseTreeMeta::from_vec(meta)
 }

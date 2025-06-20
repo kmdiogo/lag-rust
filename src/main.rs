@@ -1,3 +1,4 @@
+mod arena;
 mod lexer;
 mod parser;
 mod regex_ast;

@@ -410,6 +410,7 @@ pub fn parse(lexer: &mut Lexer) -> Result<ParserOutput, ParserErr> {
 mod tests {
     use super::*;
 
+    use crate::arena::ObjRef;
     use std::sync::Once;
 
     static INIT: Once = Once::new();
@@ -419,10 +420,6 @@ mod tests {
     }
 
     fn inorder_traversal(tree: &ParseTree) -> Vec<String> {
-        let root = match tree.get_root_ref() {
-            Some(n) => n,
-            None => return Vec::new(),
-        };
         let mut result: Vec<String> = Vec::new();
         fn helper(node_ref: NodeRef, result: &mut Vec<String>, tree: &ParseTree) {
             let node = tree.get(node_ref);
@@ -444,7 +441,7 @@ mod tests {
                 }
             };
         }
-        helper(root, &mut result, tree);
+        helper(ObjRef((tree.size() - 1) as u32), &mut result, tree);
         result
     }
 
