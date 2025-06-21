@@ -220,7 +220,7 @@ fn match_regex_stmt(ctx: &mut ParserContext) -> Result<Option<ParseTree>, Parser
     let regex_node = match_regex(ctx, &mut tree)?;
     match regex_node {
         Some(node) => {
-            let end_node = tree.add(ParseTreeNode::Character("#".to_string()));
+            let end_node = tree.add(ParseTreeNode::Character('#'));
             tree.add(ParseTreeNode::Concat {
                 left: node,
                 right: end_node,
@@ -334,7 +334,9 @@ fn match_rfactor(
             ctx.lexer.mode = LexerMode::Regex;
             ctx.lexer.get_token();
             ctx.lexer.mode = LexerMode::Default;
-            tree.add(ParseTreeNode::Character(peek_token.lexeme))
+            tree.add(ParseTreeNode::Character(
+                peek_token.lexeme.chars().nth(0).unwrap(),
+            ))
         }
         Token::BracketOpen => {
             ctx.lexer.get_token();
@@ -343,12 +345,15 @@ fn match_rfactor(
                 return Ok(None);
             }
 
-            if !ctx.class_lookup_table.contains_key(&id_token.lexeme) {
-                return Err(ParserErr {
-                    message: format!("Undefined class identifier '{}'", id_token.lexeme),
-                    token: id_token,
-                });
-            }
+            let char_set = match ctx.class_lookup_table.get(&id_token.lexeme) {
+                Some(char_set) => char_set,
+                None => {
+                    return Err(ParserErr {
+                        message: format!("Undefined class identifier '{}'", id_token.lexeme),
+                        token: id_token,
+                    })
+                }
+            };
 
             let bracket_close_token = ctx.lexer.get_token();
             if bracket_close_token.token != BracketClose {
@@ -361,7 +366,7 @@ fn match_rfactor(
                 });
             }
 
-            tree.add(ParseTreeNode::Id(id_token.lexeme))
+            ParseTree::add_charset(tree, char_set)
         }
         Token::ParenOpen => {
             ctx.lexer.get_token();
@@ -424,7 +429,7 @@ mod tests {
         fn helper(node_ref: NodeRef, result: &mut Vec<String>, tree: &ParseTree) {
             let node = tree.get(node_ref);
             match node {
-                ParseTreeNode::Character(_c) | ParseTreeNode::Id(_c) => {
+                ParseTreeNode::Character(_c) => {
                     result.push(format!("{}", node));
                     return;
                 }
@@ -503,7 +508,7 @@ mod tests {
     #[test]
     fn test_regex_with_class() {
         setup();
-        let input = "class alpha [a-zA-Z]
+        let input = "class alpha [a-c]
 ignore /[alpha]+/
 ";
         let mut lexer = Lexer::from_string(input);
@@ -513,10 +518,15 @@ ignore /[alpha]+/
         let output = parse_result.unwrap();
         assert_eq!(output.ignore_parse_trees.len(), 1);
         let parse_tree = &output.ignore_parse_trees[0];
-        assert_eq!(
-            inorder_traversal(parse_tree),
-            vec!["Id(alpha)", "Plus", "Concat", "Character(#)"]
-        )
+        let possible_chars = vec!["Character(a)", "Character(b)", "Character(c)"];
+        let inorder = inorder_traversal(parse_tree);
+        for char_position in [0, 2, 4] {
+            assert!(possible_chars.contains(&&*inorder[char_position]),)
+        }
+        for union_position in [1, 3] {
+            assert_eq!(inorder[union_position], "Union")
+        }
+        assert_eq!(inorder[5..], vec!["Plus", "Concat", "Character(#)"])
     }
 
     #[test]
