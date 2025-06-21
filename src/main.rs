@@ -29,7 +29,7 @@ pub fn main() {
     let mut lexer = Lexer::from_string(&text);
 
     println!("Parsing...");
-    let parse_output = match parse(&mut lexer) {
+    let _parse_output = match parse(&mut lexer) {
         Ok(output) => {
             println!("Parsing successful.");
             output

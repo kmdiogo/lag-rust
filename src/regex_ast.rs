@@ -1,5 +1,5 @@
 use crate::arena::{Arena, ObjRef};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 pub type NodeRef = ObjRef;
@@ -44,9 +44,10 @@ pub struct ParseTreeNodeMeta {
 }
 
 pub type ParseTreeMeta = Arena<ParseTreeNodeMeta>;
-pub fn get_parse_tree_meta(tree: &ParseTree, root: ObjRef) -> ParseTreeMeta {
+
+pub fn get_parse_tree_meta(tree: &ParseTree, root: NodeRef) -> ParseTreeMeta {
     let mut meta: Vec<ParseTreeNodeMeta> = Vec::new();
-    for i in 0..tree.size() {
+    for _i in 0..tree.size() {
         meta.push(ParseTreeNodeMeta {
             nullable: false,
             first_pos: HashSet::new(),
@@ -57,7 +58,7 @@ pub fn get_parse_tree_meta(tree: &ParseTree, root: ObjRef) -> ParseTreeMeta {
     fn calculate_meta(node_ref: NodeRef, meta: &mut Vec<ParseTreeNodeMeta>, ast: &ParseTree) {
         let ast_node = ast.get(node_ref);
         match ast_node {
-            ParseTreeNode::Character(s) | ParseTreeNode::Id(s) => {
+            ParseTreeNode::Character(_s) | ParseTreeNode::Id(_s) => {
                 meta[node_ref.0 as usize] = ParseTreeNodeMeta {
                     last_pos: HashSet::from([node_ref]),
                     first_pos: HashSet::from([node_ref]),
@@ -66,7 +67,7 @@ pub fn get_parse_tree_meta(tree: &ParseTree, root: ObjRef) -> ParseTreeMeta {
             }
             ParseTreeNode::Union { left, right } => {
                 calculate_meta(*left, meta, ast);
-                calculate_meta((*right), meta, ast);
+                calculate_meta(*right, meta, ast);
                 let left_meta = &meta[left.0 as usize];
                 let right_meta = &meta[right.0 as usize];
                 meta[node_ref.0 as usize] = ParseTreeNodeMeta {
@@ -85,7 +86,7 @@ pub fn get_parse_tree_meta(tree: &ParseTree, root: ObjRef) -> ParseTreeMeta {
             }
             ParseTreeNode::Concat { left, right } => {
                 calculate_meta(*left, meta, ast);
-                calculate_meta((*right), meta, ast);
+                calculate_meta(*right, meta, ast);
                 let left_meta = &meta[left.0 as usize];
                 let right_meta = &meta[right.0 as usize];
                 let nullable = left_meta.nullable && right_meta.nullable;
@@ -133,6 +134,44 @@ pub fn get_parse_tree_meta(tree: &ParseTree, root: ObjRef) -> ParseTreeMeta {
     ParseTreeMeta::from(meta)
 }
 
+pub fn get_follow_pos(
+    ast: &ParseTree,
+    meta: &ParseTreeMeta,
+    root: NodeRef,
+) -> HashMap<NodeRef, HashSet<NodeRef>> {
+    let mut follow_pos: HashMap<NodeRef, HashSet<NodeRef>> = HashMap::new();
+    fn helper(
+        ast: &ParseTree,
+        meta: &ParseTreeMeta,
+        node_ref: NodeRef,
+        follow_pos: &mut HashMap<NodeRef, HashSet<NodeRef>>,
+    ) {
+        let node = meta.get(node_ref);
+        match ast.get(node_ref) {
+            ParseTreeNode::Concat { left, right, .. } => {
+                let follow_nodes = &meta.get(*right).first_pos;
+                for nref in &meta.get(*left).last_pos {
+                    let nref_followpos = follow_pos.entry(*nref).or_insert(HashSet::new());
+                    nref_followpos.extend(follow_nodes.into_iter())
+                }
+                helper(ast, meta, *left, follow_pos);
+                helper(ast, meta, *right, follow_pos);
+            }
+            ParseTreeNode::Star { child } | ParseTreeNode::Plus { child } => {
+                let follow_nodes = &node.first_pos;
+                for nref in &node.last_pos {
+                    let nref_followpos = follow_pos.entry(*nref).or_insert(HashSet::new());
+                    nref_followpos.extend(follow_nodes.into_iter())
+                }
+                helper(ast, meta, *child, follow_pos);
+            }
+            _ => {}
+        };
+    }
+    helper(ast, meta, root, &mut follow_pos);
+    follow_pos
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,9 +198,14 @@ mod tests {
             right: b2_char,
         });
         let b3_char = ast.add(ParseTreeNode::Character("b".to_string()));
-        let root = ast.add(ParseTreeNode::Concat {
+        let cat3_node = ast.add(ParseTreeNode::Concat {
             left: cat2_node,
             right: b3_char,
+        });
+        let end_char = ast.add(ParseTreeNode::Character("#".to_string()));
+        let root = ast.add(ParseTreeNode::Concat {
+            left: cat3_node,
+            right: end_char,
         });
 
         let meta = get_parse_tree_meta(&ast, root);
@@ -173,6 +217,25 @@ mod tests {
             root_meta.first_pos,
             HashSet::from([a_char, b_char, a2_char])
         );
-        assert_eq!(root_meta.last_pos, HashSet::from([b3_char]))
+        assert_eq!(root_meta.last_pos, HashSet::from([end_char]));
+
+        let followpos = get_follow_pos(&ast, &meta, root);
+        assert_eq!(followpos.len(), 5);
+        for nref in [a_char, a2_char, b_char, b2_char, b3_char] {
+            assert!(followpos.contains_key(&nref));
+        }
+
+        // Assert values in followpos table
+        assert_eq!(
+            followpos.get(&a_char).unwrap(),
+            &HashSet::from([a_char, b_char, a2_char])
+        );
+        assert_eq!(
+            followpos.get(&b_char).unwrap(),
+            &HashSet::from([a_char, b_char, a2_char])
+        );
+        assert_eq!(followpos.get(&a2_char).unwrap(), &HashSet::from([b2_char]));
+        assert_eq!(followpos.get(&b2_char).unwrap(), &HashSet::from([b3_char]));
+        assert_eq!(followpos.get(&b3_char).unwrap(), &HashSet::from([end_char]));
     }
 }
