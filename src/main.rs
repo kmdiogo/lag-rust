@@ -1,12 +1,17 @@
 mod arena;
+mod dfa_serializer;
 mod lexer;
 mod parser;
 mod regex_ast;
 
+use crate::arena::ObjRef;
+use crate::dfa_serializer::serialize_dfa;
 use crate::lexer::Lexer;
 use crate::parser::parse;
+use crate::regex_ast::{get_dfa, get_follow_pos, NodeRef, ParseTree};
 use clap::Parser;
 use std::fs;
+use std::fs::File;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -29,7 +34,7 @@ pub fn main() {
     let mut lexer = Lexer::from_string(&text);
 
     println!("Parsing...");
-    let _parse_output = match parse(&mut lexer) {
+    let parse_output = match parse(&mut lexer) {
         Ok(output) => {
             println!("Parsing successful.");
             output
@@ -40,4 +45,11 @@ pub fn main() {
             return;
         }
     };
+    let ast = parse_output.token_parse_trees.values().next().unwrap();
+    let root = ObjRef((ast.size() - 1) as u32);
+    let meta = ParseTree::get_meta(ast, root);
+    let followpos = get_follow_pos(ast, &meta, root);
+    let dfa_table = get_dfa(ast, &meta, &followpos, root);
+    let mut file = File::create("states.json").unwrap();
+    serialize_dfa(&mut file, &dfa_table, &meta.get(root as NodeRef).first_pos);
 }

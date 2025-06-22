@@ -37,9 +37,9 @@ impl fmt::Display for ParseTreeNode {
 pub type ParseTree = Arena<ParseTreeNode>;
 
 pub struct ParseTreeNodeMeta {
-    nullable: bool,
-    first_pos: BTreeSet<NodeRef>,
-    last_pos: BTreeSet<NodeRef>,
+    pub nullable: bool,
+    pub first_pos: BTreeSet<NodeRef>,
+    pub last_pos: BTreeSet<NodeRef>,
 }
 
 pub type ParseTreeMeta = Arena<ParseTreeNodeMeta>;
@@ -352,6 +352,5 @@ mod tests {
             *dfa.accepting_states.iter().next().unwrap(),
             BTreeSet::from([a_char, b_char, a2_char, end_char])
         );
-        println!("Accepting states:\n{:?}", dfa.accepting_states);
     }
 }

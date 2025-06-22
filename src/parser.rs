@@ -11,9 +11,9 @@ pub struct ParserErr {
 
 #[derive(Debug)]
 pub struct ParserOutput {
-    class_lookup_table: HashMap<String, HashSet<char>>,
-    token_parse_trees: HashMap<String, ParseTree>,
-    ignore_parse_trees: Vec<ParseTree>,
+    pub class_lookup_table: HashMap<String, HashSet<char>>,
+    pub token_parse_trees: HashMap<String, ParseTree>,
+    pub ignore_parse_trees: Vec<ParseTree>,
 }
 
 struct ParserContext<'a> {
