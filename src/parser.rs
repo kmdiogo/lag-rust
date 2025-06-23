@@ -1,3 +1,4 @@
+use crate::arena::ObjRef;
 use crate::lexer::Token::BracketClose;
 use crate::lexer::{Lexer, LexerMode, Token, TokenEntry};
 use crate::regex_ast::{NodeRef, ParseTree, ParseTreeNode};
@@ -12,15 +13,15 @@ pub struct ParserErr {
 #[derive(Debug)]
 pub struct ParserOutput {
     pub class_lookup_table: HashMap<String, HashSet<char>>,
-    pub token_parse_trees: HashMap<String, ParseTree>,
-    pub ignore_parse_trees: Vec<ParseTree>,
+    pub end_nodes: HashMap<NodeRef, String>,
+    pub tree: ParseTree,
 }
 
 struct ParserContext<'a> {
     lexer: &'a mut Lexer,
+    tree: &'a mut ParseTree,
+    end_nodes: &'a mut HashMap<NodeRef, String>,
     class_lookup_table: &'a mut HashMap<String, HashSet<char>>,
-    token_parse_trees: &'a mut HashMap<String, ParseTree>,
-    ignore_parse_trees: &'a mut Vec<ParseTree>,
 }
 
 fn is_identifier(lexeme: &str) -> bool {
@@ -161,6 +162,22 @@ fn match_c_item(ctx: &mut ParserContext, class_name: &str) -> Result<bool, Parse
     Ok(true)
 }
 
+fn add_regex_subtree(ctx: &mut ParserContext, token_id: String) -> Result<(), ParserErr> {
+    // Check if tree already exists in AST
+    let left_node = match ctx.tree.size() > 0 {
+        true => Some(ObjRef((ctx.tree.size() - 1) as u32)),
+        false => None,
+    };
+    let regex_node = match_regex_stmt(ctx, &token_id)?;
+    if let Some(node) = regex_node {
+        if let Some(left) = left_node {
+            ctx.tree.add(ParseTreeNode::Union { left, right: node });
+        }
+    }
+
+    Ok(())
+}
+
 fn match_token_stmt(ctx: &mut ParserContext) -> Result<bool, ParserErr> {
     if ctx.lexer.peek_token().token != Token::Token {
         return Ok(false);
@@ -182,10 +199,7 @@ fn match_token_stmt(ctx: &mut ParserContext) -> Result<bool, ParserErr> {
         });
     }
 
-    if let Some(regex_node) = match_regex_stmt(ctx)? {
-        ctx.token_parse_trees
-            .insert(identifier.lexeme.clone(), regex_node);
-    }
+    add_regex_subtree(ctx, identifier.lexeme)?;
 
     Ok(true)
 }
@@ -196,15 +210,15 @@ fn match_ignore_stmt(ctx: &mut ParserContext) -> Result<bool, ParserErr> {
     }
     ctx.lexer.get_token();
 
-    let regex_node = match_regex_stmt(ctx)?;
-    if let Some(node) = regex_node {
-        ctx.ignore_parse_trees.push(node);
-    }
+    add_regex_subtree(ctx, "!".to_string())?;
 
     Ok(true)
 }
 
-fn match_regex_stmt(ctx: &mut ParserContext) -> Result<Option<ParseTree>, ParserErr> {
+fn match_regex_stmt(
+    ctx: &mut ParserContext,
+    token_id: &String,
+) -> Result<Option<NodeRef>, ParserErr> {
     let regex_begin = ctx.lexer.get_token();
     if regex_begin.token != Token::ForwardSlash {
         return Err(ParserErr {
@@ -216,17 +230,17 @@ fn match_regex_stmt(ctx: &mut ParserContext) -> Result<Option<ParseTree>, Parser
         });
     }
 
-    let mut tree = ParseTree::default();
-    let regex_node = match_regex(ctx, &mut tree)?;
-    match regex_node {
+    let regex_node = match_regex(ctx)?;
+    let regex_root = match regex_node {
         Some(node) => {
-            let end_node = tree.add(ParseTreeNode::Character('#'));
-            tree.add(ParseTreeNode::Concat {
+            let end_node = ctx.tree.add(ParseTreeNode::Character('#'));
+            ctx.end_nodes.insert(end_node, token_id.clone());
+            Some(ctx.tree.add(ParseTreeNode::Concat {
                 left: node,
                 right: end_node,
-            });
+            }))
         }
-        None => return Ok(None),
+        None => None,
     };
 
     let regex_end = ctx.lexer.get_token();
@@ -240,14 +254,11 @@ fn match_regex_stmt(ctx: &mut ParserContext) -> Result<Option<ParseTree>, Parser
         });
     }
 
-    Ok(Some(tree))
+    Ok(regex_root)
 }
 
-fn match_regex(
-    ctx: &mut ParserContext,
-    tree: &mut ParseTree,
-) -> Result<Option<NodeRef>, ParserErr> {
-    let rterm_node = match match_rterm(ctx, tree)? {
+fn match_regex(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> {
+    let rterm_node = match match_rterm(ctx)? {
         Some(n) => n,
         None => return Ok(None),
     };
@@ -257,7 +268,7 @@ fn match_regex(
     }
 
     let pipe_token = ctx.lexer.get_token();
-    let right = match_regex(ctx, tree)?;
+    let right = match_regex(ctx)?;
     let regex_node = match right {
         Some(right_node) => ParseTreeNode::Union {
             left: rterm_node,
@@ -270,19 +281,16 @@ fn match_regex(
             })
         }
     };
-    Ok(Some(tree.add(regex_node)))
+    Ok(Some(ctx.tree.add(regex_node)))
 }
 
-fn match_rterm(
-    ctx: &mut ParserContext,
-    tree: &mut ParseTree,
-) -> Result<Option<NodeRef>, ParserErr> {
-    let rclosure_node = match match_rclosure(ctx, tree)? {
+fn match_rterm(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> {
+    let rclosure_node = match match_rclosure(ctx)? {
         Some(n) => n,
         None => return Ok(None),
     };
 
-    let right = match_rterm(ctx, tree)?;
+    let right = match_rterm(ctx)?;
     let rterm_node = match right {
         Some(right_node) => ParseTreeNode::Concat {
             left: rclosure_node,
@@ -290,14 +298,11 @@ fn match_rterm(
         },
         None => return Ok(Some(rclosure_node)),
     };
-    Ok(Some(tree.add(rterm_node)))
+    Ok(Some(ctx.tree.add(rterm_node)))
 }
 
-fn match_rclosure(
-    ctx: &mut ParserContext,
-    tree: &mut ParseTree,
-) -> Result<Option<NodeRef>, ParserErr> {
-    let rfactor_node = match match_rfactor(ctx, tree)? {
+fn match_rclosure(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> {
+    let rfactor_node = match match_rfactor(ctx)? {
         Some(n) => n,
         None => return Ok(None),
     };
@@ -317,13 +322,10 @@ fn match_rclosure(
 
     ctx.lexer.get_token();
 
-    Ok(Some(tree.add(operator_node)))
+    Ok(Some(ctx.tree.add(operator_node)))
 }
 
-fn match_rfactor(
-    ctx: &mut ParserContext,
-    tree: &mut ParseTree,
-) -> Result<Option<NodeRef>, ParserErr> {
+fn match_rfactor(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> {
     ctx.lexer.mode = LexerMode::Regex;
     let peek_token = ctx.lexer.peek_token();
     ctx.lexer.mode = LexerMode::Default;
@@ -334,7 +336,7 @@ fn match_rfactor(
             ctx.lexer.mode = LexerMode::Regex;
             ctx.lexer.get_token();
             ctx.lexer.mode = LexerMode::Default;
-            tree.add(ParseTreeNode::Character(
+            ctx.tree.add(ParseTreeNode::Character(
                 peek_token.lexeme.chars().nth(0).unwrap(),
             ))
         }
@@ -366,11 +368,11 @@ fn match_rfactor(
                 });
             }
 
-            ParseTree::add_charset(tree, char_set)
+            ParseTree::add_charset(ctx.tree, char_set)
         }
         Token::ParenOpen => {
             ctx.lexer.get_token();
-            let inner_regex_node = match match_regex(ctx, tree)? {
+            let inner_regex_node = match match_regex(ctx)? {
                 Some(n) => n,
                 None => return Ok(None),
             };
@@ -398,16 +400,25 @@ fn match_rfactor(
 pub fn parse(lexer: &mut Lexer) -> Result<ParserOutput, ParserErr> {
     let mut results = ParserOutput {
         class_lookup_table: HashMap::new(),
-        token_parse_trees: HashMap::new(),
-        ignore_parse_trees: Vec::new(),
+        end_nodes: HashMap::new(),
+        tree: ParseTree::default(),
     };
-    let mut context = ParserContext {
+    let mut ctx = ParserContext {
         lexer,
         class_lookup_table: &mut results.class_lookup_table,
-        token_parse_trees: &mut results.token_parse_trees,
-        ignore_parse_trees: &mut results.ignore_parse_trees,
+        end_nodes: &mut results.end_nodes,
+        tree: &mut results.tree,
     };
-    match_stmt_list(&mut context)?;
+    match_stmt_list(&mut ctx)?;
+    // Add end char to AST
+    if ctx.tree.size() > 0 {
+        let left = ObjRef((ctx.tree.size() - 1) as u32);
+        let end_char = ctx.tree.add(ParseTreeNode::Character('#'));
+        ctx.tree.add(ParseTreeNode::Concat {
+            left,
+            right: end_char,
+        });
+    }
     Ok(results)
 }
 
@@ -429,7 +440,7 @@ mod tests {
         fn helper(node_ref: NodeRef, result: &mut Vec<String>, tree: &ParseTree) {
             let node = tree.get(node_ref);
             match node {
-                ParseTreeNode::Character(_c) => {
+                ParseTreeNode::Character { .. } => {
                     result.push(format!("{}", node));
                     return;
                 }
@@ -475,15 +486,16 @@ mod tests {
         assert_eq!(parse_result.is_ok(), true);
 
         let output = parse_result.unwrap();
-        assert_eq!(output.token_parse_trees.contains_key("sample"), true);
-        let parse_tree = output.token_parse_trees.get("sample").unwrap();
+        let parse_tree = output.tree;
         assert_eq!(
-            inorder_traversal(parse_tree),
+            inorder_traversal(&parse_tree),
             vec![
                 "Character(a)",
                 "Union",
                 "Character(b)",
                 "Star",
+                "Concat",
+                "Character(#)",
                 "Concat",
                 "Character(#)"
             ]
@@ -516,8 +528,7 @@ ignore /[alpha]+/
         assert_eq!(parse_result.is_ok(), true);
 
         let output = parse_result.unwrap();
-        assert_eq!(output.ignore_parse_trees.len(), 1);
-        let parse_tree = &output.ignore_parse_trees[0];
+        let parse_tree = &output.tree;
         let possible_chars = vec!["Character(a)", "Character(b)", "Character(c)"];
         let inorder = inorder_traversal(parse_tree);
         for char_position in [0, 2, 4] {
@@ -526,7 +537,10 @@ ignore /[alpha]+/
         for union_position in [1, 3] {
             assert_eq!(inorder[union_position], "Union")
         }
-        assert_eq!(inorder[5..], vec!["Plus", "Concat", "Character(#)"])
+        assert_eq!(
+            inorder[5..],
+            vec!["Plus", "Concat", "Character(#)", "Concat", "Character(#)"]
+        );
     }
 
     #[test]
@@ -538,8 +552,7 @@ ignore /[alpha]+/
         assert_eq!(parse_result.is_ok(), true);
 
         let output = parse_result.unwrap();
-        assert_eq!(output.ignore_parse_trees.len(), 1);
-        let parse_tree = &output.ignore_parse_trees[0];
+        let parse_tree = &output.tree;
         assert_eq!(
             inorder_traversal(parse_tree),
             vec![
@@ -550,6 +563,8 @@ ignore /[alpha]+/
                 "Star",
                 "Concat",
                 "Character( )",
+                "Concat",
+                "Character(#)",
                 "Concat",
                 "Character(#)"
             ]

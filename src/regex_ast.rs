@@ -18,7 +18,9 @@ pub enum ParseTreeNode {
 impl fmt::Display for ParseTreeNode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ParseTreeNode::Character(s) => write!(f, "Character({})", s),
+            ParseTreeNode::Character(char) => {
+                write!(f, "Character({})", char)
+            }
             ParseTreeNode::Star { child: _child } => write!(f, "Star"),
             ParseTreeNode::Plus { child: _child } => write!(f, "Plus"),
             ParseTreeNode::Question { child: _child } => write!(f, "Question"),
@@ -58,7 +60,7 @@ impl ParseTree {
         fn calculate_meta(node_ref: NodeRef, meta: &mut Vec<ParseTreeNodeMeta>, ast: &ParseTree) {
             let ast_node = ast.get(node_ref);
             match ast_node {
-                ParseTreeNode::Character(_s) => {
+                ParseTreeNode::Character { .. } => {
                     meta[node_ref.0 as usize] = ParseTreeNodeMeta {
                         last_pos: BTreeSet::from([node_ref]),
                         first_pos: BTreeSet::from([node_ref]),
@@ -176,10 +178,21 @@ pub fn get_follow_pos(
         follow_pos: &mut HashMap<NodeRef, BTreeSet<NodeRef>>,
     ) {
         let node = meta.get(node_ref);
+        // debug!(
+        //     "Calculating followpos for {:?}({:?})",
+        //     ast.get(node_ref),
+        //     node_ref
+        // );
         match ast.get(node_ref) {
             ParseTreeNode::Concat { left, right, .. } => {
                 let follow_nodes = &meta.get(*right).first_pos;
                 for nref in &meta.get(*left).last_pos {
+                    // debug!(
+                    //     "  followpos({:?}({:?})) = {:?}",
+                    //     ast.get(*nref),
+                    //     nref,
+                    //     follow_nodes,
+                    // );
                     let nref_followpos = follow_pos.entry(*nref).or_insert(BTreeSet::new());
                     nref_followpos.extend(follow_nodes.into_iter())
                 }
@@ -193,6 +206,10 @@ pub fn get_follow_pos(
                     nref_followpos.extend(follow_nodes.into_iter())
                 }
                 helper(ast, meta, *child, follow_pos);
+            }
+            ParseTreeNode::Union { left, right } => {
+                helper(ast, meta, *left, follow_pos);
+                helper(ast, meta, *right, follow_pos);
             }
             _ => {}
         };
@@ -222,7 +239,6 @@ fn group_nodes_by_char(
 
 pub struct DFA {
     pub state_table: HashMap<BTreeSet<NodeRef>, HashMap<char, BTreeSet<NodeRef>>>,
-    pub accepting_states: HashSet<BTreeSet<NodeRef>>,
 }
 
 pub fn get_dfa(
@@ -248,6 +264,11 @@ pub fn get_dfa(
             debug!("  {} groups => {:?}", char, node_refs);
             let mut target_state: BTreeSet<NodeRef> = BTreeSet::new();
             for node_ref in &node_refs {
+                debug!(
+                    "Getting followpos for node {:?}({:?})",
+                    node_ref,
+                    ast.get(*node_ref)
+                );
                 target_state = target_state
                     .union(followpos.get(&node_ref).unwrap())
                     .cloned()
@@ -264,10 +285,7 @@ pub fn get_dfa(
             state_transition.insert(char, target_state.clone());
         }
     }
-    DFA {
-        accepting_states,
-        state_table,
-    }
+    DFA { state_table }
 }
 
 #[cfg(test)]
@@ -347,10 +365,5 @@ mod tests {
                 println!("  {:?}", inner_entry);
             }
         }
-        assert_eq!(dfa.accepting_states.len(), 1);
-        assert_eq!(
-            *dfa.accepting_states.iter().next().unwrap(),
-            BTreeSet::from([a_char, b_char, a2_char, end_char])
-        );
     }
 }

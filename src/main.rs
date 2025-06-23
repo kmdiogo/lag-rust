@@ -10,6 +10,7 @@ use crate::lexer::Lexer;
 use crate::parser::parse;
 use crate::regex_ast::{get_dfa, get_follow_pos, NodeRef, ParseTree};
 use clap::Parser;
+use log::debug;
 use std::fs;
 use std::fs::File;
 
@@ -45,11 +46,26 @@ pub fn main() {
             return;
         }
     };
-    let ast = parse_output.token_parse_trees.values().next().unwrap();
+    let ast = &parse_output.tree;
+    debug!("Node Ref Mapping:");
+    debug!("End nodes: {:?}", &parse_output.end_nodes);
+    for (node_ref, node) in ast.get_pool().iter().enumerate() {
+        debug!(" {:?} => {:?}", ObjRef(node_ref as u32), node);
+    }
     let root = ObjRef((ast.size() - 1) as u32);
     let meta = ParseTree::get_meta(ast, root);
     let followpos = get_follow_pos(ast, &meta, root);
+    debug!("Follow pos:");
+    for (node_ref, node) in followpos.iter() {
+        debug!("  {:?} => {:?}", node_ref, node);
+    }
     let dfa_table = get_dfa(ast, &meta, &followpos, root);
     let mut file = File::create("states.json").unwrap();
-    serialize_dfa(&mut file, &dfa_table, &meta.get(root as NodeRef).first_pos);
+    debug!("Parse tree size {:?}", ast.get_pool().len());
+    serialize_dfa(
+        &mut file,
+        &dfa_table,
+        &meta.get(root as NodeRef).first_pos,
+        &parse_output.end_nodes,
+    );
 }

@@ -1,10 +1,34 @@
 use crate::regex_ast::{NodeRef, DFA};
-use serde_json::{Map, Value};
-use std::collections::{BTreeSet, HashMap};
+use log::debug;
+use serde_json::{to_value, Map, Value};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
 
-pub fn serialize_dfa(file: &mut File, dfa: &DFA, entry_state: &BTreeSet<NodeRef>) {
+fn get_accepting_tokens(
+    end_nodes: &HashMap<NodeRef, String>,
+    state: &BTreeSet<NodeRef>,
+) -> HashSet<String> {
+    debug!("Getting associated tokens for state: {:?}", state);
+    let mut result = HashSet::new();
+    for node_ref in state {
+        match end_nodes.get(&node_ref) {
+            Some(token_id) => result.insert(token_id.clone()),
+            None => {
+                continue;
+            }
+        };
+    }
+    debug!("  Result: {:?}", result);
+    result
+}
+
+pub fn serialize_dfa(
+    file: &mut File,
+    dfa: &DFA,
+    entry_state: &BTreeSet<NodeRef>,
+    end_nodes: &HashMap<NodeRef, String>,
+) {
     let mut state_ids: HashMap<BTreeSet<NodeRef>, usize> = HashMap::new();
     for (i, state) in dfa.state_table.keys().enumerate() {
         state_ids.insert(state.clone(), i + 1);
@@ -34,12 +58,17 @@ pub fn serialize_dfa(file: &mut File, dfa: &DFA, entry_state: &BTreeSet<NodeRef>
     }
 
     let mut json_obj = Map::new();
-    let accepting_states: Vec<usize> = dfa
-        .accepting_states
-        .iter()
-        .map(|state| *state_ids.get(state).unwrap())
-        .collect();
-    json_obj.insert("accepting".to_string(), Value::from(accepting_states));
+    let mut accepting_states: Map<String, Value> = Map::new();
+    for state in dfa.state_table.keys() {
+        let accepting_tokens = get_accepting_tokens(end_nodes, state);
+        if accepting_tokens.len() > 0 {
+            accepting_states.insert(
+                String::from(state_ids.get(state).unwrap().to_string()),
+                to_value(accepting_tokens).unwrap(),
+            );
+        }
+    }
+    json_obj.insert("accepting".to_string(), Value::Object(accepting_states));
     json_obj.insert("states".to_string(), Value::Object(states_obj));
     json_obj.insert(
         "entry".to_string(),
