@@ -223,7 +223,7 @@ impl Lexer {
                             next_state: Some(State::Initial),
                             return_token: Some(Token::Characters),
                         }
-                    } else if c.is_alphanumeric() {
+                    } else if c.is_alphanumeric() || *c == '_' {
                         Transition {
                             next_state: None,
                             return_token: None,

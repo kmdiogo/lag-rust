@@ -1,7 +1,11 @@
+//! Parsing logic for lexical analyzer generator
+//! Implements recursive descent parser for input file grammar with some
+//! side effects to update lookup tables
+
 use crate::arena::ObjRef;
 use crate::lexer::Token::BracketClose;
 use crate::lexer::{Lexer, LexerMode, Token, TokenEntry};
-use crate::regex_ast::{NodeRef, ParseTree, ParseTreeNode};
+use crate::regex_ast::{ASTNode, NodeRef, AST};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
@@ -13,13 +17,15 @@ pub struct ParserErr {
 #[derive(Debug)]
 pub struct ParserOutput {
     pub class_lookup_table: HashMap<String, HashSet<char>>,
+    pub token_order: Vec<String>,
     pub end_nodes: HashMap<NodeRef, String>,
-    pub tree: ParseTree,
+    pub tree: AST,
 }
 
 struct ParserContext<'a> {
     lexer: &'a mut Lexer,
-    tree: &'a mut ParseTree,
+    tree: &'a mut AST,
+    token_order: &'a mut Vec<String>,
     end_nodes: &'a mut HashMap<NodeRef, String>,
     class_lookup_table: &'a mut HashMap<String, HashSet<char>>,
 }
@@ -30,12 +36,13 @@ fn is_identifier(lexeme: &str) -> bool {
     }
 
     let mut chars = lexeme.chars();
-    if !chars.next().unwrap().is_alphabetic() {
+    let first_char = chars.next().unwrap();
+    if !(first_char.is_alphabetic() || first_char == '_') {
         return false;
     }
 
     for ch in chars {
-        if !ch.is_alphanumeric() {
+        if !(ch.is_alphanumeric() || ch == '_') {
             return false;
         }
     }
@@ -43,6 +50,8 @@ fn is_identifier(lexeme: &str) -> bool {
     return true;
 }
 
+/// stmtList → stmt stmtList
+///          | ε
 fn match_stmt_list(ctx: &mut ParserContext) -> Result<bool, ParserErr> {
     ctx.lexer.peek_token();
     if ctx.lexer.peek_token().token == Token::EOI {
@@ -55,10 +64,15 @@ fn match_stmt_list(ctx: &mut ParserContext) -> Result<bool, ParserErr> {
 
     match_stmt_list(ctx)
 }
+
+/// stmt → classStmt
+///      | tokenStmt
+///      | ignoreStmt
 fn match_stmt(ctx: &mut ParserContext) -> Result<bool, ParserErr> {
     Ok(match_class_stmt(ctx)? || match_token_stmt(ctx)? || match_ignore_stmt(ctx)?)
 }
 
+/// classStmt → class id [ cltemList ]
 fn match_class_stmt(ctx: &mut ParserContext) -> Result<bool, ParserErr> {
     if ctx.lexer.peek_token().token != Token::Class {
         return Ok(false);
@@ -107,9 +121,11 @@ fn match_class_stmt(ctx: &mut ParserContext) -> Result<bool, ParserErr> {
         });
     }
 
-    return Ok(true);
+    Ok(true)
 }
 
+/// cItemList → cItem cItemList
+/// | ε
 fn match_c_item_list(ctx: &mut ParserContext, class_name: &str) -> Result<bool, ParserErr> {
     if ctx.lexer.peek_token().token == Token::BracketClose {
         return Ok(true);
@@ -122,6 +138,8 @@ fn match_c_item_list(ctx: &mut ParserContext, class_name: &str) -> Result<bool, 
     match_c_item_list(ctx, class_name)
 }
 
+/// cItem → <any_char>              * ] must be escaped
+///       | <any_char> - <any_char>
 fn match_c_item(ctx: &mut ParserContext, class_name: &str) -> Result<bool, ParserErr> {
     let current_token = ctx.lexer.get_token();
     if current_token.token == Token::Characters {
@@ -171,13 +189,14 @@ fn add_regex_subtree(ctx: &mut ParserContext, token_id: String) -> Result<(), Pa
     let regex_node = match_regex_stmt(ctx, &token_id)?;
     if let Some(node) = regex_node {
         if let Some(left) = left_node {
-            ctx.tree.add(ParseTreeNode::Union { left, right: node });
+            ctx.tree.add(ASTNode::Union { left, right: node });
         }
     }
 
     Ok(())
 }
 
+/// tokenStmt → token <chars> / regexStmt /
 fn match_token_stmt(ctx: &mut ParserContext) -> Result<bool, ParserErr> {
     if ctx.lexer.peek_token().token != Token::Token {
         return Ok(false);
@@ -199,11 +218,13 @@ fn match_token_stmt(ctx: &mut ParserContext) -> Result<bool, ParserErr> {
         });
     }
 
+    ctx.token_order.push(identifier.lexeme.clone());
     add_regex_subtree(ctx, identifier.lexeme)?;
 
     Ok(true)
 }
 
+/// ignoreStmt → ignore regexStmt
 fn match_ignore_stmt(ctx: &mut ParserContext) -> Result<bool, ParserErr> {
     if ctx.lexer.peek_token().token != Token::Ignore {
         return Ok(false);
@@ -215,6 +236,7 @@ fn match_ignore_stmt(ctx: &mut ParserContext) -> Result<bool, ParserErr> {
     Ok(true)
 }
 
+/// regexStmt → / regex /
 fn match_regex_stmt(
     ctx: &mut ParserContext,
     token_id: &String,
@@ -233,9 +255,9 @@ fn match_regex_stmt(
     let regex_node = match_regex(ctx)?;
     let regex_root = match regex_node {
         Some(node) => {
-            let end_node = ctx.tree.add(ParseTreeNode::Character('#'));
+            let end_node = ctx.tree.add(ASTNode::Character('#'));
             ctx.end_nodes.insert(end_node, token_id.clone());
-            Some(ctx.tree.add(ParseTreeNode::Concat {
+            Some(ctx.tree.add(ASTNode::Concat {
                 left: node,
                 right: end_node,
             }))
@@ -257,6 +279,8 @@ fn match_regex_stmt(
     Ok(regex_root)
 }
 
+/// regex → regex | rTerm
+///       | rTerm
 fn match_regex(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> {
     let rterm_node = match match_rterm(ctx)? {
         Some(n) => n,
@@ -270,7 +294,7 @@ fn match_regex(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> {
     let pipe_token = ctx.lexer.get_token();
     let right = match_regex(ctx)?;
     let regex_node = match right {
-        Some(right_node) => ParseTreeNode::Union {
+        Some(right_node) => ASTNode::Union {
             left: rterm_node,
             right: right_node,
         },
@@ -284,6 +308,8 @@ fn match_regex(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> {
     Ok(Some(ctx.tree.add(regex_node)))
 }
 
+/// rTerm → rTerm rClosure
+///       | rClosure
 fn match_rterm(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> {
     let rclosure_node = match match_rclosure(ctx)? {
         Some(n) => n,
@@ -292,7 +318,7 @@ fn match_rterm(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> {
 
     let right = match_rterm(ctx)?;
     let rterm_node = match right {
-        Some(right_node) => ParseTreeNode::Concat {
+        Some(right_node) => ASTNode::Concat {
             left: rclosure_node,
             right: right_node,
         },
@@ -301,6 +327,10 @@ fn match_rterm(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> {
     Ok(Some(ctx.tree.add(rterm_node)))
 }
 
+/// rClosure → rFactor *
+///          | rFactor +
+///          | rFactor ?
+///          | rFactor
 fn match_rclosure(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> {
     let rfactor_node = match match_rfactor(ctx)? {
         Some(n) => n,
@@ -308,13 +338,13 @@ fn match_rclosure(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr>
     };
 
     let operator_node = match ctx.lexer.peek_token().token {
-        Token::Star => ParseTreeNode::Star {
+        Token::Star => ASTNode::Star {
             child: rfactor_node,
         },
-        Token::Plus => ParseTreeNode::Plus {
+        Token::Plus => ASTNode::Plus {
             child: rfactor_node,
         },
-        Token::Question => ParseTreeNode::Question {
+        Token::Question => ASTNode::Question {
             child: rfactor_node,
         },
         _ => return Ok(Some(rfactor_node)),
@@ -325,6 +355,9 @@ fn match_rclosure(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr>
     Ok(Some(ctx.tree.add(operator_node)))
 }
 
+/// rFactor → character
+///         | [ id ]
+///         | ( regex )
 fn match_rfactor(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> {
     ctx.lexer.mode = LexerMode::Regex;
     let peek_token = ctx.lexer.peek_token();
@@ -336,7 +369,7 @@ fn match_rfactor(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> 
             ctx.lexer.mode = LexerMode::Regex;
             ctx.lexer.get_token();
             ctx.lexer.mode = LexerMode::Default;
-            ctx.tree.add(ParseTreeNode::Character(
+            ctx.tree.add(ASTNode::Character(
                 peek_token.lexeme.chars().nth(0).unwrap(),
             ))
         }
@@ -368,7 +401,7 @@ fn match_rfactor(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> 
                 });
             }
 
-            ParseTree::add_charset(ctx.tree, char_set)
+            AST::add_charset(ctx.tree, char_set)
         }
         Token::ParenOpen => {
             ctx.lexer.get_token();
@@ -397,24 +430,29 @@ fn match_rfactor(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> 
     Ok(Some(rfactor_node))
 }
 
+/// Parse a stream of input tokens into an AST + other useful metadata
 pub fn parse(lexer: &mut Lexer) -> Result<ParserOutput, ParserErr> {
     let mut results = ParserOutput {
         class_lookup_table: HashMap::new(),
         end_nodes: HashMap::new(),
-        tree: ParseTree::default(),
+        tree: AST::default(),
+        token_order: Vec::new(),
     };
     let mut ctx = ParserContext {
         lexer,
         class_lookup_table: &mut results.class_lookup_table,
         end_nodes: &mut results.end_nodes,
         tree: &mut results.tree,
+        token_order: &mut results.token_order,
     };
     match_stmt_list(&mut ctx)?;
+    // Add ignore character
+    ctx.token_order.push("!".to_string());
     // Add end char to AST
     if ctx.tree.size() > 0 {
         let left = ObjRef((ctx.tree.size() - 1) as u32);
-        let end_char = ctx.tree.add(ParseTreeNode::Character('#'));
-        ctx.tree.add(ParseTreeNode::Concat {
+        let end_char = ctx.tree.add(ASTNode::Character('#'));
+        ctx.tree.add(ASTNode::Concat {
             left,
             right: end_char,
         });
@@ -435,22 +473,20 @@ mod tests {
         INIT.call_once(env_logger::init);
     }
 
-    fn inorder_traversal(tree: &ParseTree) -> Vec<String> {
+    fn inorder_traversal(tree: &AST) -> Vec<String> {
         let mut result: Vec<String> = Vec::new();
-        fn helper(node_ref: NodeRef, result: &mut Vec<String>, tree: &ParseTree) {
+        fn helper(node_ref: NodeRef, result: &mut Vec<String>, tree: &AST) {
             let node = tree.get(node_ref);
             match node {
-                ParseTreeNode::Character { .. } => {
+                ASTNode::Character { .. } => {
                     result.push(format!("{}", node));
                     return;
                 }
-                ParseTreeNode::Star { child }
-                | ParseTreeNode::Question { child }
-                | ParseTreeNode::Plus { child } => {
+                ASTNode::Star { child } | ASTNode::Question { child } | ASTNode::Plus { child } => {
                     helper(*child, result, tree);
                     result.push(format!("{}", node))
                 }
-                ParseTreeNode::Concat { left, right } | ParseTreeNode::Union { left, right } => {
+                ASTNode::Concat { left, right } | ASTNode::Union { left, right } => {
                     helper(*left, result, tree);
                     result.push(format!("{}", node));
                     helper(*right, result, tree);

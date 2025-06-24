@@ -8,11 +8,12 @@ use crate::arena::ObjRef;
 use crate::dfa_serializer::serialize_dfa;
 use crate::lexer::Lexer;
 use crate::parser::parse;
-use crate::regex_ast::{get_dfa, get_follow_pos, NodeRef, ParseTree};
+use crate::regex_ast::{get_dfa, get_follow_pos, NodeRef, AST};
 use clap::Parser;
 use log::debug;
 use std::fs;
 use std::fs::File;
+use std::io::Write;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -47,13 +48,14 @@ pub fn main() {
         }
     };
     let ast = &parse_output.tree;
+    debug!("Parse tree size {:?}", ast.get_pool().len());
     debug!("Node Ref Mapping:");
     debug!("End nodes: {:?}", &parse_output.end_nodes);
     for (node_ref, node) in ast.get_pool().iter().enumerate() {
         debug!(" {:?} => {:?}", ObjRef(node_ref as u32), node);
     }
     let root = ObjRef((ast.size() - 1) as u32);
-    let meta = ParseTree::get_meta(ast, root);
+    let meta = AST::get_meta(ast, root);
     let followpos = get_follow_pos(ast, &meta, root);
     debug!("Follow pos:");
     for (node_ref, node) in followpos.iter() {
@@ -61,11 +63,14 @@ pub fn main() {
     }
     let dfa_table = get_dfa(ast, &meta, &followpos, root);
     let mut file = File::create("states.json").unwrap();
-    debug!("Parse tree size {:?}", ast.get_pool().len());
-    serialize_dfa(
-        &mut file,
+    let json_string = serialize_dfa(
         &dfa_table,
         &meta.get(root as NodeRef).first_pos,
         &parse_output.end_nodes,
+        &parse_output.token_order,
     );
+    match file.write_all(json_string.as_bytes()) {
+        Ok(_) => {}
+        Err(why) => panic!("Error writing serialized DFA to JSON file: {}", why),
+    };
 }
