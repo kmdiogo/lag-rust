@@ -1,26 +1,44 @@
 mod arena;
 mod dfa_serializer;
+mod driver_generatable;
 mod lexer;
 mod parser;
 mod regex_ast;
 
 use crate::arena::ObjRef;
 use crate::dfa_serializer::serialize_dfa;
+use crate::driver_generatable::{DriverGeneratable, PythonDriverGenerator};
 use crate::lexer::Lexer;
 use crate::parser::parse;
 use crate::regex_ast::{get_dfa, get_follow_pos, NodeRef, AST};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use log::debug;
-use std::fs;
 use std::fs::File;
 use std::io::Write;
+use std::{fmt, fs};
+
+#[derive(ValueEnum, Clone, Debug)]
+enum DriverLanguage {
+    Python,
+}
+
+impl fmt::Display for DriverLanguage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self) // or use a custom string if needed
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
     #[arg(short, long)]
     input_file: String,
+
+    #[arg(short, long, default_value = "python")]
+    driver_language: DriverLanguage,
 }
+
+static python_driver_template: &'static str = include_str!("../driver_templates/python.py");
 
 fn get_input(input_file: &str) -> (String, String) {
     (
@@ -48,6 +66,10 @@ pub fn main() {
         }
     };
     let ast = &parse_output.tree;
+    if ast.size() == 0 {
+        println!("No definitions found.");
+        return;
+    }
     debug!("Parse tree size {:?}", ast.get_pool().len());
     debug!("Node Ref Mapping:");
     debug!("End nodes: {:?}", &parse_output.end_nodes);
@@ -73,4 +95,25 @@ pub fn main() {
         Ok(_) => {}
         Err(why) => panic!("Error writing serialized DFA to JSON file: {}", why),
     };
+
+    let user_defined_token_ids: Vec<String> = parse_output
+        .token_order
+        .into_iter()
+        .filter(|token| token != "!")
+        .collect();
+    match args.driver_language {
+        DriverLanguage::Python => {
+            let mut driver_file = File::create("driver.py").unwrap();
+            let contents = python_driver_template
+                .replace(
+                    "'__TOKEN_ENTRIES__'",
+                    &PythonDriverGenerator::get_token_entries(&user_defined_token_ids),
+                )
+                .replace(
+                    "'__STATE_TOKEN_MAPPING__'",
+                    &PythonDriverGenerator::get_state_token_mapping(&user_defined_token_ids),
+                );
+            driver_file.write_all(contents.as_bytes()).unwrap();
+        }
+    }
 }
