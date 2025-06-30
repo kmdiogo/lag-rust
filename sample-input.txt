@@ -1,8 +1,9 @@
-class digit [1]
-//class alpha [a-zA-Z_]
-//class digit [0-9]
-//class whitespace [\n\t\f\v\r\ ]
+class alpha [a-zA-Z_]
+class digit [0-9]
+class whitespace [\n\t\f\v\r\ ]
 
-//token Ident /[alpha]([alpha]|[digit])* /
+token Identifier /[alpha]([alpha]|[digit])* /
+token VarKeyword /var /
+token Semicolon /;/
 
-//ignore /[whitespace]+/
+ignore /[whitespace]+/

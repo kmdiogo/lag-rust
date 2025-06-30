@@ -1,31 +1,39 @@
+use crate::parser::{ClassSetEntry, ClassSetOperator};
 use crate::regex_ast::{NodeRef, DFA};
 use log::debug;
-use serde_json::{to_value, Map, Value};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct SerializedClassSet {
+    chars: HashSet<char>,
+    exclude: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct SerializedDFA {
+    accepting: HashMap<String, Vec<String>>,
+    class_sets: HashMap<String, SerializedClassSet>,
+    entry: String,
+    states: HashMap<String, HashMap<String, String>>,
+}
 
 /// Returns all accepting tokens, if any, for a state set
 fn get_accepting_tokens(
     end_nodes: &HashMap<NodeRef, String>,
     state: &BTreeSet<NodeRef>,
-) -> HashSet<String> {
+    token_order: &Vec<String>,
+) -> Vec<String> {
     debug!("Getting accepting tokens for state: {:?}", state);
-    let mut result = HashSet::new();
+    let mut accepting_tokens = HashSet::new();
     for node_ref in state {
         match end_nodes.get(&node_ref) {
-            Some(token_id) => result.insert(token_id.clone()),
+            Some(token_id) => accepting_tokens.insert(token_id.clone()),
             None => {
                 continue;
             }
         };
     }
-    debug!("  Result: {:?}", result);
-    result
-}
-
-fn sort_accepting_tokens(
-    accepting_tokens: &HashSet<String>,
-    token_order: &Vec<String>,
-) -> Vec<String> {
     let mut sorted_tokens: Vec<String> = Vec::new();
     for token in token_order {
         if !accepting_tokens.contains(token) {
@@ -33,6 +41,7 @@ fn sort_accepting_tokens(
         }
         sorted_tokens.push(token.clone());
     }
+    debug!("  Result: {:?}", sorted_tokens);
     sorted_tokens
 }
 
@@ -42,6 +51,7 @@ pub fn serialize_dfa(
     entry_state: &BTreeSet<NodeRef>,
     end_nodes: &HashMap<NodeRef, String>,
     token_order: &Vec<String>,
+    class_lookup_table: &BTreeMap<String, ClassSetEntry>,
 ) -> String {
     let mut state_ids: HashMap<BTreeSet<NodeRef>, usize> = HashMap::new();
     for (i, state) in dfa.state_table.keys().enumerate() {
@@ -55,40 +65,53 @@ pub fn serialize_dfa(
     }
 
     // Manually construct the JSON object
-    let mut states_obj = Map::new();
-
-    for (outer_key, inner_map) in &dfa.state_table {
-        let mut inner_json = Map::new();
-        for (inner_key, value) in inner_map {
-            inner_json.insert(
-                (*inner_key).to_string(),
-                Value::from(state_ids.get(value).unwrap().to_string()),
+    let mut serialized_states: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for (state_set, transition_table) in &dfa.state_table {
+        let mut serialized_transition_table: HashMap<String, String> = HashMap::new();
+        for (input_symbol, transition_state_set) in transition_table {
+            serialized_transition_table.insert(
+                (*input_symbol).clone(),
+                state_ids.get(transition_state_set).unwrap().to_string(),
             );
         }
-        states_obj.insert(
-            state_ids.get(outer_key).unwrap().to_string(),
-            Value::Object(inner_json),
+        serialized_states.insert(
+            state_ids.get(state_set).unwrap().to_string(),
+            serialized_transition_table,
         );
     }
 
-    let mut json_obj = Map::new();
-    let mut accepting_states: Map<String, Value> = Map::new();
+    let mut accepting_states: HashMap<String, Vec<String>> = HashMap::new();
     for state in dfa.state_table.keys() {
-        let accepting_tokens =
-            sort_accepting_tokens(&get_accepting_tokens(end_nodes, state), token_order);
+        let accepting_tokens = get_accepting_tokens(end_nodes, state, &token_order);
         if accepting_tokens.len() > 0 {
             accepting_states.insert(
                 String::from(state_ids.get(state).unwrap().to_string()),
-                to_value(accepting_tokens).unwrap(),
+                accepting_tokens,
             );
         }
     }
-    json_obj.insert("accepting".to_string(), Value::Object(accepting_states));
-    json_obj.insert("states".to_string(), Value::Object(states_obj));
-    json_obj.insert(
-        "entry".to_string(),
-        Value::from(state_ids.get(entry_state).unwrap().to_string()),
-    );
-    let json_string = serde_json::to_string_pretty(&Value::Object(json_obj)).unwrap();
+
+    let class_sets: HashMap<_, _> = class_lookup_table
+        .iter()
+        .map(|(class_id, class_set)| {
+            (
+                format!("[{}]", class_id),
+                SerializedClassSet {
+                    chars: class_set.chars.clone(),
+                    exclude: match class_set.operator {
+                        ClassSetOperator::Excludes => true,
+                        _ => false,
+                    },
+                },
+            )
+        })
+        .collect();
+    let serialized_dfa = SerializedDFA {
+        entry: state_ids.get(entry_state).unwrap().to_string(),
+        accepting: accepting_states,
+        states: serialized_states,
+        class_sets: class_sets,
+    };
+    let json_string = serde_json::to_string_pretty(&serialized_dfa).unwrap();
     json_string
 }

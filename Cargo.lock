@@ -195,6 +195,7 @@ dependencies = [
  "env_logger",
  "itertools",
  "log",
+ "serde",
  "serde_json",
 ]
 

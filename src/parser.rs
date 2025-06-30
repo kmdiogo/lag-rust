@@ -6,7 +6,7 @@ use crate::arena::ObjRef;
 use crate::lexer::Token::BracketClose;
 use crate::lexer::{Lexer, LexerMode, Token, TokenEntry};
 use crate::regex_ast::{ASTNode, NodeRef, AST};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug)]
 pub struct ParserErr {
@@ -15,8 +15,21 @@ pub struct ParserErr {
 }
 
 #[derive(Debug)]
+pub enum ClassSetOperator {
+    Includes,
+    Excludes,
+}
+
+#[derive(Debug)]
+pub struct ClassSetEntry {
+    pub chars: HashSet<char>,
+    pub operator: ClassSetOperator,
+}
+
+#[derive(Debug)]
 pub struct ParserOutput {
-    pub class_lookup_table: HashMap<String, HashSet<char>>,
+    pub class_lookup_table: BTreeMap<String, ClassSetEntry>,
+    pub alphabet: HashMap<char, HashSet<String>>,
     pub token_order: Vec<String>,
     pub end_nodes: HashMap<NodeRef, String>,
     pub tree: AST,
@@ -25,9 +38,10 @@ pub struct ParserOutput {
 struct ParserContext<'a> {
     lexer: &'a mut Lexer,
     tree: &'a mut AST,
+    alphabet: &'a mut HashMap<char, HashSet<String>>,
     token_order: &'a mut Vec<String>,
     end_nodes: &'a mut HashMap<NodeRef, String>,
-    class_lookup_table: &'a mut HashMap<String, HashSet<char>>,
+    class_lookup_table: &'a mut BTreeMap<String, ClassSetEntry>,
 }
 
 fn is_identifier(lexeme: &str) -> bool {
@@ -96,17 +110,26 @@ fn match_class_stmt(ctx: &mut ParserContext) -> Result<bool, ParserErr> {
 
     // Initialize character vector for this defined class that will hold the character set
     let current_class = ctx.lexer.get_token();
-    ctx.class_lookup_table
-        .insert(current_class.lexeme.to_string(), HashSet::new());
 
     let set_start = ctx.lexer.get_token();
+    let class_set_operator = match set_start.token {
+        Token::BracketOpen => ClassSetOperator::Includes,
+        Token::BracketOpenNegate => ClassSetOperator::Excludes,
+        _ => {
+            return Err(ParserErr {
+                message: format!("Expected '[' but found {} instead", set_start.lexeme),
+                token: set_start,
+            });
+        }
+    };
 
-    if set_start.token != Token::BracketOpen && set_start.token != Token::BracketOpenNegate {
-        return Err(ParserErr {
-            message: format!("Expected '[' but found {} instead", set_start.lexeme),
-            token: set_start,
-        });
-    }
+    ctx.class_lookup_table.insert(
+        current_class.lexeme.to_string(),
+        ClassSetEntry {
+            chars: HashSet::new(),
+            operator: class_set_operator,
+        },
+    );
 
     let matched_c_item_list = match_c_item_list(ctx, &current_class.lexeme)?;
     if !matched_c_item_list {
@@ -149,6 +172,7 @@ fn match_c_item(ctx: &mut ParserContext, class_name: &str) -> Result<bool, Parse
             ctx.class_lookup_table
                 .get_mut(class_name)
                 .unwrap()
+                .chars
                 .insert(ch);
         }
     } else if current_token.token == Token::CharacterRange {
@@ -168,6 +192,7 @@ fn match_c_item(ctx: &mut ParserContext, class_name: &str) -> Result<bool, Parse
             ctx.class_lookup_table
                 .get_mut(class_name)
                 .unwrap()
+                .chars
                 .insert(char::from_u32(i).unwrap());
         }
     } else {
@@ -369,9 +394,9 @@ fn match_rfactor(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> 
             ctx.lexer.mode = LexerMode::Regex;
             ctx.lexer.get_token();
             ctx.lexer.mode = LexerMode::Default;
-            ctx.tree.add(ASTNode::Character(
-                peek_token.lexeme.chars().nth(0).unwrap(),
-            ))
+            let node_char = peek_token.lexeme.chars().nth(0).unwrap();
+            ctx.alphabet.entry(node_char).or_insert(HashSet::new());
+            ctx.tree.add(ASTNode::Character(node_char))
         }
         Token::BracketOpen => {
             ctx.lexer.get_token();
@@ -380,15 +405,12 @@ fn match_rfactor(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> 
                 return Ok(None);
             }
 
-            let char_set = match ctx.class_lookup_table.get(&id_token.lexeme) {
-                Some(char_set) => char_set,
-                None => {
-                    return Err(ParserErr {
-                        message: format!("Undefined class identifier '{}'", id_token.lexeme),
-                        token: id_token,
-                    })
-                }
-            };
+            if !ctx.class_lookup_table.contains_key(&id_token.lexeme) {
+                return Err(ParserErr {
+                    message: format!("Undefined class identifier '{}'", id_token.lexeme),
+                    token: id_token,
+                });
+            }
 
             let bracket_close_token = ctx.lexer.get_token();
             if bracket_close_token.token != BracketClose {
@@ -401,7 +423,7 @@ fn match_rfactor(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> 
                 });
             }
 
-            AST::add_charset(ctx.tree, char_set)
+            ctx.tree.add(ASTNode::Id(id_token.lexeme))
         }
         Token::ParenOpen => {
             ctx.lexer.get_token();
@@ -433,7 +455,7 @@ fn match_rfactor(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> 
 /// Parse a stream of input tokens into an AST + other useful metadata
 pub fn parse(lexer: &mut Lexer) -> Result<ParserOutput, ParserErr> {
     let mut results = ParserOutput {
-        class_lookup_table: HashMap::new(),
+        class_lookup_table: BTreeMap::new(),
         end_nodes: HashMap::new(),
         tree: AST::default(),
         token_order: Vec::new(),
@@ -478,7 +500,7 @@ mod tests {
         fn helper(node_ref: NodeRef, result: &mut Vec<String>, tree: &AST) {
             let node = tree.get(node_ref);
             match node {
-                ASTNode::Character { .. } => {
+                ASTNode::Character(_) | ASTNode::Id(_) => {
                     result.push(format!("{}", node));
                     return;
                 }
@@ -508,9 +530,13 @@ mod tests {
         let output = parse_result.unwrap();
         assert_eq!(output.class_lookup_table.contains_key("alpha"), true);
         assert_eq!(
-            *output.class_lookup_table.get("alpha").unwrap(),
+            output.class_lookup_table.get("alpha").unwrap().chars,
             HashSet::from(['a', 'b', 'c', 'G', 'H', 'I', '_', '1', '2', '3', 'z', '5'])
         );
+        assert!(matches!(
+            output.class_lookup_table.get("alpha").unwrap().operator,
+            ClassSetOperator::Includes {}
+        ));
     }
 
     #[test]
@@ -565,17 +591,17 @@ ignore /[alpha]+/
 
         let output = parse_result.unwrap();
         let parse_tree = &output.tree;
-        let possible_chars = vec!["Character(a)", "Character(b)", "Character(c)"];
         let inorder = inorder_traversal(parse_tree);
-        for char_position in [0, 2, 4] {
-            assert!(possible_chars.contains(&&*inorder[char_position]),)
-        }
-        for union_position in [1, 3] {
-            assert_eq!(inorder[union_position], "Union")
-        }
         assert_eq!(
-            inorder[5..],
-            vec!["Plus", "Concat", "Character(#)", "Concat", "Character(#)"]
+            inorder,
+            vec![
+                "Id(alpha)",
+                "Plus",
+                "Concat",
+                "Character(#)",
+                "Concat",
+                "Character(#)"
+            ]
         );
     }
 

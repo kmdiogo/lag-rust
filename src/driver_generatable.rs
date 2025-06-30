@@ -8,7 +8,7 @@ impl DriverGeneratable for PythonDriverGenerator {
     fn get_token_entries(token_ids: &Vec<String>) -> String {
         let mut entries = String::new();
         for token in token_ids {
-            entries.push_str(format!("    {} = auto()", token.to_uppercase()).as_str());
+            entries.push_str(format!("    {} = auto()\n", token.to_uppercase()).as_str());
         }
         entries
     }
@@ -16,7 +16,8 @@ impl DriverGeneratable for PythonDriverGenerator {
     fn get_state_token_mapping(token_ids: &Vec<String>) -> String {
         let mut mapping = "{\n".to_string();
         for token in token_ids {
-            mapping.push_str(format!("    \"{}\": Token.{}", token, token.to_uppercase()).as_str());
+            mapping
+                .push_str(format!("    \"{}\": Token.{},\n", token, token.to_uppercase()).as_str());
         }
         mapping.push_str("\n}".to_string().as_str());
         mapping

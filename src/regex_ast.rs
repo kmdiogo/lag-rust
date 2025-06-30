@@ -8,6 +8,7 @@ pub type NodeRef = ObjRef;
 #[derive(Debug)]
 pub enum ASTNode {
     Character(char),
+    Id(String),
     Star { child: NodeRef },
     Plus { child: NodeRef },
     Question { child: NodeRef },
@@ -20,6 +21,9 @@ impl fmt::Display for ASTNode {
         match self {
             ASTNode::Character(char) => {
                 write!(f, "Character({})", char)
+            }
+            ASTNode::Id(id) => {
+                write!(f, "Id({})", id)
             }
             ASTNode::Star { child: _child } => write!(f, "Star"),
             ASTNode::Plus { child: _child } => write!(f, "Plus"),
@@ -62,7 +66,7 @@ impl AST {
         fn calculate_meta(node_ref: NodeRef, meta: &mut Vec<ASTMetaNode>, ast: &AST) {
             let ast_node = ast.get(node_ref);
             match ast_node {
-                ASTNode::Character { .. } => {
+                ASTNode::Character(_) | ASTNode::Id(_) => {
                     meta[node_ref.0 as usize] = ASTMetaNode {
                         last_pos: BTreeSet::from([node_ref]),
                         first_pos: BTreeSet::from([node_ref]),
@@ -137,28 +141,6 @@ impl AST {
         calculate_meta(root, &mut meta, tree);
         ASTMeta::from(meta)
     }
-
-    /// Adds a character set to an AST. This is done by taking the union of all characters in the set and returning the root node
-    pub fn add_charset(tree: &mut AST, char_set: &HashSet<char>) -> NodeRef {
-        if char_set.is_empty() {
-            panic!("empty char set provided. This indicates in upstream issue when setting a class identifier in the lookup table.");
-        }
-
-        if char_set.len() == 1 {
-            tree.add(ASTNode::Character(*char_set.iter().next().unwrap()));
-        }
-
-        let chars = Vec::from_iter(char_set.iter());
-        let mut last_node: NodeRef = tree.add(ASTNode::Character(*chars[0]));
-        for char in chars.iter().skip(1) {
-            let right = tree.add(ASTNode::Character(**char));
-            last_node = tree.add(ASTNode::Union {
-                left: last_node,
-                right,
-            });
-        }
-        last_node
-    }
 }
 
 /// Computes all followpos(i), for all nodes i in an AST
@@ -210,26 +192,27 @@ pub fn get_follow_pos(
 }
 
 /// Gets all nodes in a state set grouped by input character
-fn group_nodes_by_char(
+fn group_nodes_by_input_symbol(
     node_refs: &BTreeSet<NodeRef>,
     ast: &AST,
-) -> HashMap<char, BTreeSet<NodeRef>> {
-    let mut groups: HashMap<char, BTreeSet<NodeRef>> = HashMap::new();
+) -> HashMap<String, BTreeSet<NodeRef>> {
+    let mut groups: HashMap<String, BTreeSet<NodeRef>> = HashMap::new();
     for node_ref in node_refs {
-        let char = match ast.get(*node_ref) {
-            ASTNode::Character(char) => char,
+        let input_symbol = match ast.get(*node_ref) {
+            ASTNode::Character(char) => String::from(*char),
+            ASTNode::Id(id) => format!("[{}]", id), // adding brackets around Id to avoid conflicts with single character identifiers
             other => {
-                panic!("node {:?} is not a character node. This indicates an issue in upstream ast or ast meta code.", other)
+                panic!("node {:?} is not a character or Id node. This indicates an issue in upstream ast or ast meta code.", other)
             }
         };
-        let group = groups.entry(*char).or_insert(BTreeSet::new());
+        let group = groups.entry(input_symbol).or_insert(BTreeSet::new());
         group.insert(*node_ref);
     }
     groups
 }
 
 pub struct DFA {
-    pub state_table: HashMap<BTreeSet<NodeRef>, HashMap<char, BTreeSet<NodeRef>>>,
+    pub state_table: HashMap<BTreeSet<NodeRef>, HashMap<String, BTreeSet<NodeRef>>>,
 }
 
 /// Computes the DFA transition table from an AST
@@ -241,19 +224,19 @@ pub fn get_dfa(
 ) -> DFA {
     let root_meta = meta.get(root);
     let mut accepting_states = HashSet::new();
-    let mut state_table: HashMap<BTreeSet<NodeRef>, HashMap<char, BTreeSet<NodeRef>>> =
+    let mut state_table: HashMap<BTreeSet<NodeRef>, HashMap<String, BTreeSet<NodeRef>>> =
         HashMap::from([(root_meta.first_pos.clone(), HashMap::new())]);
     let mut queue: VecDeque<BTreeSet<NodeRef>> = VecDeque::from([root_meta.first_pos.clone()]);
     while queue.len() > 0 {
         let cur_state = queue.pop_front().unwrap();
         debug!("Doing {:?}", cur_state);
-        let grouped_nodes = group_nodes_by_char(&cur_state, ast);
-        for (char, node_refs) in grouped_nodes {
-            if char == '#' {
+        let grouped_nodes = group_nodes_by_input_symbol(&cur_state, ast);
+        for (input_symbol, node_refs) in grouped_nodes {
+            if input_symbol == "#" {
                 accepting_states.insert(cur_state.clone());
                 continue;
             }
-            debug!("  {} groups => {:?}", char, node_refs);
+            debug!("  {} groups => {:?}", input_symbol, node_refs);
             let mut target_state: BTreeSet<NodeRef> = BTreeSet::new();
             for node_ref in &node_refs {
                 debug!(
@@ -274,7 +257,7 @@ pub fn get_dfa(
             let state_transition = state_table
                 .entry(cur_state.clone())
                 .or_insert(HashMap::new());
-            state_transition.insert(char, target_state.clone());
+            state_transition.insert(input_symbol, target_state.clone());
         }
     }
     DFA { state_table }

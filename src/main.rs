@@ -38,7 +38,7 @@ struct Args {
     driver_language: DriverLanguage,
 }
 
-static python_driver_template: &'static str = include_str!("../driver_templates/python.py");
+static PYTHON_DRIVER_TEMPLATE: &'static str = include_str!("../driver_templates/python.py");
 
 fn get_input(input_file: &str) -> (String, String) {
     (
@@ -90,6 +90,7 @@ pub fn main() {
         &meta.get(root as NodeRef).first_pos,
         &parse_output.end_nodes,
         &parse_output.token_order,
+        &parse_output.class_lookup_table,
     );
     match file.write_all(json_string.as_bytes()) {
         Ok(_) => {}
@@ -104,7 +105,7 @@ pub fn main() {
     match args.driver_language {
         DriverLanguage::Python => {
             let mut driver_file = File::create("driver.py").unwrap();
-            let contents = python_driver_template
+            let contents = PYTHON_DRIVER_TEMPLATE
                 .replace(
                     "'__TOKEN_ENTRIES__'",
                     &PythonDriverGenerator::get_token_entries(&user_defined_token_ids),
