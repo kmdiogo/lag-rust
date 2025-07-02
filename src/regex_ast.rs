@@ -193,20 +193,17 @@ pub fn get_follow_pos(
 
 /// Gets all nodes in a state set grouped by input character
 fn group_nodes_by_input_symbol(
+    node_input_symbols: &HashMap<NodeRef, HashSet<char>>,
     node_refs: &BTreeSet<NodeRef>,
-    ast: &AST,
 ) -> HashMap<String, BTreeSet<NodeRef>> {
     let mut groups: HashMap<String, BTreeSet<NodeRef>> = HashMap::new();
     for node_ref in node_refs {
-        let input_symbol = match ast.get(*node_ref) {
-            ASTNode::Character(char) => String::from(*char),
-            ASTNode::Id(id) => format!("[{}]", id), // adding brackets around Id to avoid conflicts with single character identifiers
-            other => {
-                panic!("node {:?} is not a character or Id node. This indicates an issue in upstream ast or ast meta code.", other)
-            }
-        };
-        let group = groups.entry(input_symbol).or_insert(BTreeSet::new());
-        group.insert(*node_ref);
+        for char in node_input_symbols.get(node_ref).unwrap() {
+            groups
+                .entry(char.to_string())
+                .or_insert(BTreeSet::new())
+                .insert(*node_ref);
+        }
     }
     groups
 }
@@ -221,6 +218,7 @@ pub fn get_dfa(
     meta: &ASTMeta,
     followpos: &HashMap<NodeRef, BTreeSet<NodeRef>>,
     root: NodeRef,
+    node_input_symbols: &HashMap<NodeRef, HashSet<char>>,
 ) -> DFA {
     let root_meta = meta.get(root);
     let mut accepting_states = HashSet::new();
@@ -229,8 +227,8 @@ pub fn get_dfa(
     let mut queue: VecDeque<BTreeSet<NodeRef>> = VecDeque::from([root_meta.first_pos.clone()]);
     while queue.len() > 0 {
         let cur_state = queue.pop_front().unwrap();
-        debug!("Doing {:?}", cur_state);
-        let grouped_nodes = group_nodes_by_input_symbol(&cur_state, ast);
+        debug!("State {:?}", cur_state);
+        let grouped_nodes = group_nodes_by_input_symbol(node_input_symbols, &cur_state);
         for (input_symbol, node_refs) in grouped_nodes {
             if input_symbol == "#" {
                 accepting_states.insert(cur_state.clone());
@@ -299,6 +297,15 @@ mod tests {
             right: end_char,
         });
 
+        let node_input_symbols: HashMap<NodeRef, HashSet<char>> = HashMap::from([
+            (a_char, HashSet::from(['a'])),
+            (b_char, HashSet::from(['b'])),
+            (a2_char, HashSet::from(['a'])),
+            (b2_char, HashSet::from(['b'])),
+            (b3_char, HashSet::from(['b'])),
+            (end_char, HashSet::from(['#'])),
+        ]);
+
         let meta = AST::get_meta(&ast, root);
         let meta_pool = meta.get_pool();
         let root_meta = &meta_pool[root.0 as usize];
@@ -333,7 +340,7 @@ mod tests {
             &BTreeSet::from([end_char])
         );
 
-        let dfa = get_dfa(&ast, &meta, &followpos, root);
+        let dfa = get_dfa(&ast, &meta, &followpos, root, &node_input_symbols);
         for entry in dfa.state_table {
             println!("{:?}", entry.0);
             for inner_entry in entry.1 {

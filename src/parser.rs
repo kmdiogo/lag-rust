@@ -6,6 +6,7 @@ use crate::arena::ObjRef;
 use crate::lexer::Token::BracketClose;
 use crate::lexer::{Lexer, LexerMode, Token, TokenEntry};
 use crate::regex_ast::{ASTNode, NodeRef, AST};
+use log::debug;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug)]
@@ -16,8 +17,8 @@ pub struct ParserErr {
 
 #[derive(Debug)]
 pub enum ClassSetOperator {
-    Includes,
-    Excludes,
+    Include,
+    Negate,
 }
 
 #[derive(Debug)]
@@ -29,7 +30,7 @@ pub struct ClassSetEntry {
 #[derive(Debug)]
 pub struct ParserOutput {
     pub class_lookup_table: BTreeMap<String, ClassSetEntry>,
-    pub alphabet: HashMap<char, HashSet<String>>,
+    pub node_input_symbols: HashMap<NodeRef, HashSet<char>>,
     pub token_order: Vec<String>,
     pub end_nodes: HashMap<NodeRef, String>,
     pub tree: AST,
@@ -38,7 +39,7 @@ pub struct ParserOutput {
 struct ParserContext<'a> {
     lexer: &'a mut Lexer,
     tree: &'a mut AST,
-    alphabet: &'a mut HashMap<char, HashSet<String>>,
+    terminal_nodes: &'a mut Vec<NodeRef>,
     token_order: &'a mut Vec<String>,
     end_nodes: &'a mut HashMap<NodeRef, String>,
     class_lookup_table: &'a mut BTreeMap<String, ClassSetEntry>,
@@ -51,12 +52,12 @@ fn is_identifier(lexeme: &str) -> bool {
 
     let mut chars = lexeme.chars();
     let first_char = chars.next().unwrap();
-    if !(first_char.is_alphabetic() || first_char == '_') {
+    if !(first_char.is_ascii_alphabetic() || first_char == '_') {
         return false;
     }
 
     for ch in chars {
-        if !(ch.is_alphanumeric() || ch == '_') {
+        if !(ch.is_ascii_alphanumeric() || ch == '_') {
             return false;
         }
     }
@@ -113,8 +114,8 @@ fn match_class_stmt(ctx: &mut ParserContext) -> Result<bool, ParserErr> {
 
     let set_start = ctx.lexer.get_token();
     let class_set_operator = match set_start.token {
-        Token::BracketOpen => ClassSetOperator::Includes,
-        Token::BracketOpenNegate => ClassSetOperator::Excludes,
+        Token::BracketOpen => ClassSetOperator::Include,
+        Token::BracketOpenNegate => ClassSetOperator::Negate,
         _ => {
             return Err(ParserErr {
                 message: format!("Expected '[' but found {} instead", set_start.lexeme),
@@ -395,8 +396,15 @@ fn match_rfactor(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> 
             ctx.lexer.get_token();
             ctx.lexer.mode = LexerMode::Default;
             let node_char = peek_token.lexeme.chars().nth(0).unwrap();
-            ctx.alphabet.entry(node_char).or_insert(HashSet::new());
-            ctx.tree.add(ASTNode::Character(node_char))
+            if !node_char.is_ascii() {
+                return Err(ParserErr {
+                    token: peek_token,
+                    message: format!("Unsupported character '{}' in regex expression.", node_char),
+                });
+            }
+            let node = ctx.tree.add(ASTNode::Character(node_char));
+            ctx.terminal_nodes.push(node);
+            node
         }
         Token::BracketOpen => {
             ctx.lexer.get_token();
@@ -423,7 +431,9 @@ fn match_rfactor(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> 
                 });
             }
 
-            ctx.tree.add(ASTNode::Id(id_token.lexeme))
+            let node = ctx.tree.add(ASTNode::Id(id_token.lexeme));
+            ctx.terminal_nodes.push(node);
+            node
         }
         Token::ParenOpen => {
             ctx.lexer.get_token();
@@ -452,22 +462,84 @@ fn match_rfactor(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> 
     Ok(Some(rfactor_node))
 }
 
+/// Adds the disjoint set of characters to the alphabet lookup table
+/// Overlapping characters from different character sets will be grouped into 1
+fn get_disjoint_alphabet(
+    terminal_nodes: &Vec<NodeRef>,
+    tree: &AST,
+    class_lookup_table: &BTreeMap<String, ClassSetEntry>,
+) -> HashMap<char, HashSet<NodeRef>> {
+    let ascii_chars: HashSet<char> = (0u8..=127).map(|b| b as char).collect();
+    let mut alphabet: HashMap<char, HashSet<NodeRef>> = HashMap::new();
+    for node_ref in terminal_nodes {
+        let node = tree.get(*node_ref);
+        match node {
+            ASTNode::Character(c) => {
+                alphabet
+                    .entry(*c)
+                    .or_insert(HashSet::new())
+                    .insert(*node_ref);
+            }
+            ASTNode::Id(id) => {
+                let class_set = class_lookup_table.get(id).unwrap_or_else(|| {
+                    panic!("ID node {:?} could not be found in class table", node)
+                });
+                let class_chars = match class_set.operator {
+                    ClassSetOperator::Include => &class_set.chars,
+                    ClassSetOperator::Negate => &(&ascii_chars - &class_set.chars),
+                };
+                for char in class_chars {
+                    alphabet
+                        .entry(*char)
+                        .or_insert(HashSet::new())
+                        .insert(*node_ref);
+                }
+            }
+            _ => panic!(
+                "Encountered non-terminal node {:?} when trying to compute disjoint class set",
+                node
+            ),
+        }
+    }
+    alphabet
+}
+
+/// Gets each node's related input symbols
+fn get_node_input_symbols(
+    alphabet: &HashMap<char, HashSet<NodeRef>>,
+) -> HashMap<NodeRef, HashSet<char>> {
+    let mut node_input_symbols = HashMap::new();
+    for (char, node_refs) in alphabet {
+        for node_ref in node_refs {
+            node_input_symbols
+                .entry(*node_ref)
+                .or_insert(HashSet::new())
+                .insert(*char);
+        }
+    }
+
+    node_input_symbols
+}
+
 /// Parse a stream of input tokens into an AST + other useful metadata
 pub fn parse(lexer: &mut Lexer) -> Result<ParserOutput, ParserErr> {
-    let mut results = ParserOutput {
-        class_lookup_table: BTreeMap::new(),
-        end_nodes: HashMap::new(),
-        tree: AST::default(),
-        token_order: Vec::new(),
-    };
+    let mut class_lookup_table = BTreeMap::new();
+    let mut end_nodes = HashMap::new();
+    let mut tree = AST::default();
+    let mut token_order = Vec::new();
+    let mut terminal_nodes: Vec<_> = Vec::new();
+
     let mut ctx = ParserContext {
         lexer,
-        class_lookup_table: &mut results.class_lookup_table,
-        end_nodes: &mut results.end_nodes,
-        tree: &mut results.tree,
-        token_order: &mut results.token_order,
+        class_lookup_table: &mut class_lookup_table,
+        end_nodes: &mut end_nodes,
+        tree: &mut tree,
+        token_order: &mut token_order,
+        terminal_nodes: &mut terminal_nodes,
     };
     match_stmt_list(&mut ctx)?;
+    debug!("Terminal nodes: {:?}", ctx.terminal_nodes);
+
     // Add ignore character
     ctx.token_order.push("!".to_string());
     // Add end char to AST
@@ -479,7 +551,22 @@ pub fn parse(lexer: &mut Lexer) -> Result<ParserOutput, ParserErr> {
             right: end_char,
         });
     }
-    Ok(results)
+
+    let alphabet = get_disjoint_alphabet(&terminal_nodes, &tree, &class_lookup_table);
+    debug!("Alphabet: {:?}", &alphabet);
+    let mut node_input_symbols = get_node_input_symbols(&alphabet);
+    // Add end nodes (technically have '#' as input symbol
+    for (end_node, _) in &end_nodes {
+        node_input_symbols.insert(*end_node, HashSet::from(['#']));
+    }
+
+    Ok(ParserOutput {
+        class_lookup_table,
+        end_nodes,
+        tree,
+        token_order,
+        node_input_symbols,
+    })
 }
 
 #[cfg(test)]
@@ -520,6 +607,64 @@ mod tests {
     }
 
     #[test]
+    fn test_disjoint_alphabet() {
+        setup();
+        let mut ast = AST::default();
+        let regex1_node = ast.add(ASTNode::Id("regex1".to_string()));
+        let regex2_node = ast.add(ASTNode::Id("regex2".to_string()));
+        let a_node = ast.add(ASTNode::Character('a'));
+        let class_lookup_table: BTreeMap<String, ClassSetEntry> = BTreeMap::from([
+            (
+                "regex1".to_string(),
+                ClassSetEntry {
+                    operator: ClassSetOperator::Include,
+                    chars: HashSet::from(['a', 'b', 'c', 'd']),
+                },
+            ),
+            (
+                "regex2".to_string(),
+                ClassSetEntry {
+                    operator: ClassSetOperator::Negate,
+                    chars: HashSet::from(['b']),
+                },
+            ),
+        ]);
+        let alphabet = get_disjoint_alphabet(
+            &vec![regex1_node, regex2_node, a_node],
+            &ast,
+            &class_lookup_table,
+        );
+
+        let mut expected_alphabet: HashMap<char, HashSet<NodeRef>> = HashMap::from([
+            ('a', HashSet::from([a_node, regex1_node, regex2_node])),
+            ('b', HashSet::from([regex1_node])),
+            ('c', HashSet::from([regex1_node, regex2_node])),
+            ('d', HashSet::from([regex1_node, regex2_node])),
+        ]);
+        let ascii_chars: HashSet<char> = (0u8..=127).map(|b| b as char).collect();
+        for char in ascii_chars {
+            if expected_alphabet.contains_key(&char) {
+                continue;
+            }
+            expected_alphabet.insert(char, HashSet::from([regex2_node]));
+        }
+
+        for (char, node_refs) in expected_alphabet.iter() {
+            assert!(
+                alphabet.contains_key(char),
+                "Alphabet does not contain char '{}'",
+                char
+            );
+            assert_eq!(
+                alphabet.get(char).unwrap(),
+                node_refs,
+                "Alphabet char '{}' does not contain all expected node refs",
+                char
+            );
+        }
+    }
+
+    #[test]
     fn test_match_class_stmt() {
         setup();
         let mut lexer = Lexer::from_string("class alpha [a-cG-I_1-3z5]");
@@ -535,7 +680,7 @@ mod tests {
         );
         assert!(matches!(
             output.class_lookup_table.get("alpha").unwrap().operator,
-            ClassSetOperator::Includes {}
+            ClassSetOperator::Include {}
         ));
     }
 

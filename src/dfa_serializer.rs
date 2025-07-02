@@ -99,7 +99,7 @@ pub fn serialize_dfa(
                 SerializedClassSet {
                     chars: class_set.chars.clone(),
                     exclude: match class_set.operator {
-                        ClassSetOperator::Excludes => true,
+                        ClassSetOperator::Negate => true,
                         _ => false,
                     },
                 },

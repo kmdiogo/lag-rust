@@ -10,9 +10,8 @@ class LexerError(Exception):
 
 class Token(Enum):
     EOI = auto()
-    IDENTIFIER = auto()
-    VARKEYWORD = auto()
-    SEMICOLON = auto()
+    ATOD = auto()
+    JUSTB = auto()
 
 
 
@@ -23,9 +22,8 @@ class TokenEntry:
 
 
 STATE_TOKEN_MAPPING: dict[str, Token] = {
-    "Identifier": Token.IDENTIFIER,
-    "VarKeyword": Token.VARKEYWORD,
-    "Semicolon": Token.SEMICOLON,
+    "ATOD": Token.ATOD,
+    "JUSTB": Token.JUSTB,
 
 }
 
@@ -98,16 +96,4 @@ class Lexer:
 
         raise LexerError(f"No token found by lexer. Ensure all characters in the language have been covered by the lexer generator rules.")
 
-if __name__ == "__main__":
-    from pathlib import Path
-    import json
-    def input_generator():
-        for c in "var var1    var2    var3  var5 ;":
-            yield c
-    dfa = json.loads(Path("states.json").read_text())
-    lexer = Lexer(dfa)
-    gen = input_generator()
-    for i in range(10):
-        token = lexer.get_token(gen)
-        print(token.token, token.lexeme)
 # @formatter:on

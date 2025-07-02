@@ -71,8 +71,8 @@ pub fn main() {
         return;
     }
     debug!("Parse tree size {:?}", ast.get_pool().len());
-    debug!("Node Ref Mapping:");
     debug!("End nodes: {:?}", &parse_output.end_nodes);
+    debug!("Node input symbols: {:?}", &parse_output.node_input_symbols);
     for (node_ref, node) in ast.get_pool().iter().enumerate() {
         debug!(" {:?} => {:?}", ObjRef(node_ref as u32), node);
     }
@@ -83,7 +83,13 @@ pub fn main() {
     for (node_ref, node) in followpos.iter() {
         debug!("  {:?} => {:?}", node_ref, node);
     }
-    let dfa_table = get_dfa(ast, &meta, &followpos, root);
+    let dfa_table = get_dfa(
+        ast,
+        &meta,
+        &followpos,
+        root,
+        &parse_output.node_input_symbols,
+    );
     let mut file = File::create("states.json").unwrap();
     let json_string = serialize_dfa(
         &dfa_table,
