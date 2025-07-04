@@ -29,7 +29,7 @@ pub struct ClassSetEntry {
 
 #[derive(Debug)]
 pub struct ParserOutput {
-    pub class_lookup_table: BTreeMap<String, ClassSetEntry>,
+    class_lookup_table: BTreeMap<String, ClassSetEntry>,
     pub node_input_symbols: HashMap<NodeRef, HashSet<char>>,
     pub token_order: Vec<String>,
     pub end_nodes: HashMap<NodeRef, String>,
@@ -39,9 +39,9 @@ pub struct ParserOutput {
 struct ParserContext<'a> {
     lexer: &'a mut Lexer,
     tree: &'a mut AST,
-    terminal_nodes: &'a mut Vec<NodeRef>,
+    leaf_nodes: &'a mut Vec<NodeRef>,
     token_order: &'a mut Vec<String>,
-    end_nodes: &'a mut HashMap<NodeRef, String>,
+    accepting_nodes: &'a mut HashMap<NodeRef, String>,
     class_lookup_table: &'a mut BTreeMap<String, ClassSetEntry>,
 }
 
@@ -282,7 +282,7 @@ fn match_regex_stmt(
     let regex_root = match regex_node {
         Some(node) => {
             let end_node = ctx.tree.add(ASTNode::Character('#'));
-            ctx.end_nodes.insert(end_node, token_id.clone());
+            ctx.accepting_nodes.insert(end_node, token_id.clone());
             Some(ctx.tree.add(ASTNode::Concat {
                 left: node,
                 right: end_node,
@@ -403,7 +403,7 @@ fn match_rfactor(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> 
                 });
             }
             let node = ctx.tree.add(ASTNode::Character(node_char));
-            ctx.terminal_nodes.push(node);
+            ctx.leaf_nodes.push(node);
             node
         }
         Token::BracketOpen => {
@@ -432,7 +432,7 @@ fn match_rfactor(ctx: &mut ParserContext) -> Result<Option<NodeRef>, ParserErr> 
             }
 
             let node = ctx.tree.add(ASTNode::Id(id_token.lexeme));
-            ctx.terminal_nodes.push(node);
+            ctx.leaf_nodes.push(node);
             node
         }
         Token::ParenOpen => {
@@ -532,13 +532,13 @@ pub fn parse(lexer: &mut Lexer) -> Result<ParserOutput, ParserErr> {
     let mut ctx = ParserContext {
         lexer,
         class_lookup_table: &mut class_lookup_table,
-        end_nodes: &mut end_nodes,
+        accepting_nodes: &mut end_nodes,
         tree: &mut tree,
         token_order: &mut token_order,
-        terminal_nodes: &mut terminal_nodes,
+        leaf_nodes: &mut terminal_nodes,
     };
     match_stmt_list(&mut ctx)?;
-    debug!("Terminal nodes: {:?}", ctx.terminal_nodes);
+    debug!("Terminal nodes: {:?}", ctx.leaf_nodes);
 
     // Add ignore character
     ctx.token_order.push("!".to_string());

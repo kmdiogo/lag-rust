@@ -1,8 +1,7 @@
-use crate::parser::{ClassSetEntry, ClassSetOperator};
 use crate::regex_ast::{NodeRef, DFA};
 use log::debug;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct SerializedClassSet {
@@ -13,7 +12,6 @@ struct SerializedClassSet {
 #[derive(Serialize, Deserialize, Debug)]
 struct SerializedDFA {
     accepting: HashMap<String, Vec<String>>,
-    class_sets: HashMap<String, SerializedClassSet>,
     entry: String,
     states: HashMap<String, HashMap<String, String>>,
 }
@@ -51,7 +49,6 @@ pub fn serialize_dfa(
     entry_state: &BTreeSet<NodeRef>,
     end_nodes: &HashMap<NodeRef, String>,
     token_order: &Vec<String>,
-    class_lookup_table: &BTreeMap<String, ClassSetEntry>,
 ) -> String {
     let mut state_ids: HashMap<BTreeSet<NodeRef>, usize> = HashMap::new();
     for (i, state) in dfa.state_table.keys().enumerate() {
@@ -91,26 +88,10 @@ pub fn serialize_dfa(
         }
     }
 
-    let class_sets: HashMap<_, _> = class_lookup_table
-        .iter()
-        .map(|(class_id, class_set)| {
-            (
-                format!("[{}]", class_id),
-                SerializedClassSet {
-                    chars: class_set.chars.clone(),
-                    exclude: match class_set.operator {
-                        ClassSetOperator::Negate => true,
-                        _ => false,
-                    },
-                },
-            )
-        })
-        .collect();
     let serialized_dfa = SerializedDFA {
         entry: state_ids.get(entry_state).unwrap().to_string(),
         accepting: accepting_states,
         states: serialized_states,
-        class_sets: class_sets,
     };
     let json_string = serde_json::to_string_pretty(&serialized_dfa).unwrap();
     json_string
