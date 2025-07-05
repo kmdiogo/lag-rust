@@ -10,7 +10,7 @@ function* inputGenerator() {
 }
 
 // Load DFA from states.json
-const dfaPath = path.resolve("../states.json");
+const dfaPath = path.resolve("states.json");
 const dfa = JSON.parse(fs.readFileSync(dfaPath, "utf8"));
 
 // Instantiate the lexer and input generator

@@ -1,11 +1,18 @@
 [package]
-name = "lag-rust"
+name = "lag_rust"
 version = "0.1.0"
 edition = "2021"
+description = "Lexical Analyzer Generator (LAG) re-written in Rust (blazingly fast btw)"
+repository = "https://github.com/kmdiogo/lag-rust"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "lag_rust_lib"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+wasm-bindgen = "0.2"
 clap = { version = "4.5.28", features = ["derive"] }
 env_logger = "0.11.6"
 itertools = "0.12.0"
