@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: wasm32-unknown-unknown
+          override: true
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack
+
+      - name: Build Wasm
+        run: wasm-pack build --target web
+
+      - name: Patch package.json for semantic-release
+        run: |
+          sed -i 's/"version": "[^"]*"/"version": "0.0.0-semantic-release"/' pkg/package.json
+
+      - name: Install semantic-release plugins
+        run: npm install --save-dev semantic-release @semantic-release/git @semantic-release/npm @semantic-release/changelog @semantic-release/github
+
+      - name: Release
+        working-directory: ./pkg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npx semantic-release
