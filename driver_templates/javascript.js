@@ -7,7 +7,7 @@ class LexerError extends Error {
 }
 
 const token = {
-    EOI: Symbol("eoi"),
+    EOI: Symbol("EOI"),
 '__TOKEN_ENTRIES__'
 };
 
