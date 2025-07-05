@@ -18,6 +18,18 @@ jobs:
           node-version: 20
           registry-url: https://registry.npmjs.org
 
+      - name: Cache Rust and wasm-pack
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/wasm-pack
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -41,6 +53,6 @@ jobs:
       - name: Release
         working-directory: ./pkg
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npx semantic-release
