@@ -29,7 +29,7 @@ pub struct ClassSetEntry {
 
 #[derive(Debug)]
 pub struct ParserOutput {
-    class_lookup_table: BTreeMap<String, ClassSetEntry>,
+    _class_lookup_table: BTreeMap<String, ClassSetEntry>,
     pub node_input_symbols: HashMap<NodeRef, HashSet<char>>,
     pub token_order: Vec<String>,
     pub end_nodes: HashMap<NodeRef, String>,
@@ -561,7 +561,7 @@ pub fn parse(lexer: &mut Lexer) -> Result<ParserOutput, ParserErr> {
     }
 
     Ok(ParserOutput {
-        class_lookup_table,
+        _class_lookup_table: class_lookup_table,
         end_nodes,
         tree,
         token_order,
@@ -673,13 +673,13 @@ mod tests {
         assert_eq!(parse_result.is_ok(), true);
 
         let output = parse_result.unwrap();
-        assert_eq!(output.class_lookup_table.contains_key("alpha"), true);
+        assert_eq!(output._class_lookup_table.contains_key("alpha"), true);
         assert_eq!(
-            output.class_lookup_table.get("alpha").unwrap().chars,
+            output._class_lookup_table.get("alpha").unwrap().chars,
             HashSet::from(['a', 'b', 'c', 'G', 'H', 'I', '_', '1', '2', '3', 'z', '5'])
         );
         assert!(matches!(
-            output.class_lookup_table.get("alpha").unwrap().operator,
+            output._class_lookup_table.get("alpha").unwrap().operator,
             ClassSetOperator::Include {}
         ));
     }
